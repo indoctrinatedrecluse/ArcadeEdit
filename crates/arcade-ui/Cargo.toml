@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 arcade-core = { path = "../arcade-core" }
+arcade-language = { path = "../arcade-language" }
 gpui.workspace = true
 
 [lints]

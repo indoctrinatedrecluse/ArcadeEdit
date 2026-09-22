@@ -2,9 +2,10 @@
 
 use crate::theme::SolarizedTheme;
 use arcade_core::{Document, SelectionSet};
+use arcade_language::{resolve_line_tokens, HighlightKind, HighlightSpan, LineToken};
 use gpui::{div, prelude::*, px, Div, IntoElement};
 
-/// Represents a syntax-highlighted visual token.
+/// Represents a syntax-highlighted visual token (preserved for backward compatibility).
 #[derive(Clone, Debug)]
 pub enum SyntaxKind {
     /// Language keywords and control statements.
@@ -27,7 +28,7 @@ pub enum SyntaxKind {
     Plain,
 }
 
-/// A tokenized segment of text for rich syntax rendering.
+/// A tokenized segment of text for rich syntax rendering (preserved for backward compatibility).
 #[derive(Clone, Debug)]
 pub struct TokenSpan {
     /// The grammatical token classification.
@@ -37,139 +38,28 @@ pub struct TokenSpan {
 }
 
 /// Fast lexical tokenizer to apply vibrant Solarized colors to live document lines.
-pub fn tokenize_line(line_str: &str) -> Vec<TokenSpan> {
-    if line_str.trim_start().starts_with("//") || line_str.trim_start().starts_with("#") {
-        return vec![TokenSpan {
-            kind: SyntaxKind::Comment,
-            text: line_str.to_string(),
-        }];
-    }
-
-    let mut tokens = Vec::new();
-    let chars: Vec<char> = line_str.chars().collect();
-    let len = chars.len();
-    let mut i = 0;
-
-    while i < len {
-        let ch = chars[i];
-
-        // Whitespace
-        if ch.is_whitespace() {
-            let mut end = i + 1;
-            while end < len && chars[end].is_whitespace() {
-                end += 1;
-            }
-            tokens.push(TokenSpan {
-                kind: SyntaxKind::Plain,
-                text: chars[i..end].iter().collect(),
-            });
-            i = end;
-            continue;
-        }
-
-        // Line comment
-        if ch == '/' && i + 1 < len && chars[i + 1] == '/' {
-            tokens.push(TokenSpan {
-                kind: SyntaxKind::Comment,
-                text: chars[i..].iter().collect(),
-            });
-            break;
-        }
-
-        // String literal
-        if ch == '"' || ch == '\'' {
-            let quote = ch;
-            let mut end = i + 1;
-            let mut escaped = false;
-            while end < len {
-                if escaped {
-                    escaped = false;
-                } else if chars[end] == '\\' {
-                    escaped = true;
-                } else if chars[end] == quote {
-                    end += 1;
-                    break;
-                }
-                end += 1;
-            }
-            tokens.push(TokenSpan {
-                kind: SyntaxKind::StringLiteral,
-                text: chars[i..end].iter().collect(),
-            });
-            i = end;
-            continue;
-        }
-
-        // Numbers
-        if ch.is_ascii_digit() {
-            let mut end = i + 1;
-            while end < len && (chars[end].is_ascii_alphanumeric() || chars[end] == '.') {
-                end += 1;
-            }
-            tokens.push(TokenSpan {
-                kind: SyntaxKind::Number,
-                text: chars[i..end].iter().collect(),
-            });
-            i = end;
-            continue;
-        }
-
-        // Identifiers and Keywords
-        if ch.is_alphabetic() || ch == '_' {
-            let mut end = i + 1;
-            while end < len && (chars[end].is_alphanumeric() || chars[end] == '_') {
-                end += 1;
-            }
-            let word: String = chars[i..end].iter().collect();
-
-            let kind = match word.as_str() {
-                "use" | "pub" | "fn" | "struct" | "enum" | "impl" | "let" | "mut" | "if" | "else"
-                | "match" | "for" | "while" | "loop" | "return" | "break" | "continue" | "mod"
-                | "trait" | "type" | "const" | "static" | "as" | "where" | "async" | "await" => {
-                    SyntaxKind::Keyword
-                }
-                "self" | "super" | "crate" => SyntaxKind::Operator,
-                "true" | "false" | "Some" | "None" | "Ok" | "Err" => SyntaxKind::Number,
-                w if w.chars().next().map_or(false, |c| c.is_uppercase()) => SyntaxKind::Type,
-                _ if end < len && chars[end] == '(' => SyntaxKind::Function,
-                _ => SyntaxKind::Plain,
-            };
-
-            tokens.push(TokenSpan { kind, text: word });
-            i = end;
-            continue;
-        }
-
-        // Punctuation and Operators
-        let kind = match ch {
-            '+' | '-' | '*' | '/' | '%' | '=' | '!' | '<' | '>' | '&' | '|' | '^' => {
-                SyntaxKind::Operator
-            }
-            '{' | '}' | '(' | ')' | '[' | ']' | ';' | ',' | '.' | ':' => SyntaxKind::Punctuation,
-            _ => SyntaxKind::Plain,
-        };
-        tokens.push(TokenSpan {
-            kind,
-            text: ch.to_string(),
-        });
-        i += 1;
-    }
-
-    tokens
+pub fn tokenize_line(line_str: &str) -> Vec<LineToken> {
+    resolve_line_tokens(line_str, 0, &[])
 }
 
-/// Renders the token span with its corresponding Solarized color.
-pub fn render_token(theme: &SolarizedTheme, token: &TokenSpan) -> Div {
+/// Renders a language line token with its corresponding Solarized color.
+pub fn render_token(theme: &SolarizedTheme, token: &LineToken) -> Div {
     let color = match token.kind {
-        SyntaxKind::Keyword => theme.syntax_cyan,
-        SyntaxKind::Function => theme.syntax_blue,
-        SyntaxKind::Type => theme.syntax_yellow,
-        SyntaxKind::StringLiteral => theme.syntax_green,
-        SyntaxKind::Number => theme.syntax_orange,
-        SyntaxKind::Comment => theme.text_muted,
-        SyntaxKind::Operator => theme.syntax_magenta,
-        SyntaxKind::Punctuation => theme.text_secondary,
-        SyntaxKind::Plain => theme.text_primary,
+        HighlightKind::Keyword => theme.syntax_cyan,
+        HighlightKind::Function => theme.syntax_blue,
+        HighlightKind::Type => theme.syntax_yellow,
+        HighlightKind::String => theme.syntax_green,
+        HighlightKind::Number => theme.syntax_orange,
+        HighlightKind::Comment => theme.text_muted,
+        HighlightKind::Operator => theme.syntax_magenta,
+        HighlightKind::Punctuation => theme.text_secondary,
+        HighlightKind::Macro => theme.syntax_cyan,
+        HighlightKind::Attribute => theme.syntax_violet,
+        HighlightKind::Variable => theme.text_primary,
+        HighlightKind::Constant => theme.syntax_orange,
+        HighlightKind::Heading => theme.syntax_yellow,
+        HighlightKind::Code => theme.syntax_green,
+        HighlightKind::PlainText => theme.text_primary,
     };
 
     div().text_color(color).child(token.text.clone())
@@ -181,6 +71,7 @@ pub fn render_live_editor_surface(
     document: &Document,
     selections: &SelectionSet,
     active_filename: &str,
+    highlight_spans: &[HighlightSpan],
 ) -> impl IntoElement {
     let rope = document.rope();
     let num_lines = document.len_lines();
@@ -303,6 +194,8 @@ pub fn render_live_editor_surface(
                                         .items_center()
                                         .text_size(px(13.0));
 
+                                    let line_start_byte = rope.line_to_byte(line_idx);
+
                                     if let Some(cursor_col) = matching_cursor {
                                         let chars: Vec<char> = clean_str.chars().collect();
                                         let col = std::cmp::min(cursor_col, chars.len());
@@ -310,11 +203,20 @@ pub fn render_live_editor_surface(
                                         let before_str: String = chars[..col].iter().collect();
                                         let after_str: String = chars[col..].iter().collect();
 
-                                        let before_tokens = tokenize_line(&before_str);
-                                        let after_tokens = tokenize_line(&after_str);
+                                        let before_tokens = resolve_line_tokens(
+                                            &before_str,
+                                            line_start_byte,
+                                            highlight_spans,
+                                        );
+                                        let after_tokens = resolve_line_tokens(
+                                            &after_str,
+                                            line_start_byte + before_str.len(),
+                                            highlight_spans,
+                                        );
 
                                         for tok in &before_tokens {
-                                            line_container = line_container.child(render_token(theme, tok));
+                                            line_container =
+                                                line_container.child(render_token(theme, tok));
                                         }
 
                                         // Glowing Cyan Vertical Cursor
@@ -328,12 +230,18 @@ pub fn render_live_editor_surface(
                                         );
 
                                         for tok in &after_tokens {
-                                            line_container = line_container.child(render_token(theme, tok));
+                                            line_container =
+                                                line_container.child(render_token(theme, tok));
                                         }
                                     } else {
-                                        let tokens = tokenize_line(clean_str);
+                                        let tokens = resolve_line_tokens(
+                                            clean_str,
+                                            line_start_byte,
+                                            highlight_spans,
+                                        );
                                         for tok in &tokens {
-                                            line_container = line_container.child(render_token(theme, tok));
+                                            line_container =
+                                                line_container.child(render_token(theme, tok));
                                         }
                                     }
 

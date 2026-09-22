@@ -1,7 +1,17 @@
 //! Language services built on top of, but separate from, the text core.
 //!
-//! Tree-sitter parser workers and highlight queries will live here. Keeping
-//! them out of `arcade-core` lets plain-text and huge-file modes stay lean.
+//! Provides AST-based syntax parsing via Tree-Sitter, semantic highlight queries,
+//! markdown document tokenization, and a non-blocking background highlight worker.
+
+pub mod highlight;
+pub mod markdown;
+pub mod service;
+
+pub use highlight::{
+    map_capture_name, resolve_line_tokens, HighlightKind, HighlightSpan, LineToken,
+};
+pub use markdown::highlight_markdown;
+pub use service::{HighlightRequest, HighlightResponse, HighlightWorker, LanguageId, LanguageService};
 
 /// Reports whether syntax services should be requested for a document.
 pub fn syntax_is_enabled_for(byte_length: usize, threshold: usize) -> bool {

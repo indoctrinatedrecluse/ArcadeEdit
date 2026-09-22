@@ -10,6 +10,7 @@ pub mod theme;
 
 use arcade_core::selection::SelectionSet;
 use arcade_core::{ByteOffset, Document, History};
+use arcade_language::{HighlightSpan, HighlightWorker, LanguageId, LanguageService};
 use command_palette::{default_commands, render_command_palette, CommandItem};
 use editor_view::render_live_editor_surface;
 use gpui::{div, prelude::*, px, Context, FocusHandle, IntoElement, Render, Window};
@@ -38,6 +39,12 @@ pub struct ArcadeShell {
     pub commands: Vec<CommandItem>,
     /// Zero-based index of the active document tab.
     pub active_tab: usize,
+    /// Active language syntax grammar.
+    pub language: LanguageId,
+    /// Computed syntax highlight spans for live rendering.
+    pub highlight_spans: Vec<HighlightSpan>,
+    /// Dedicated background syntax highlighting worker.
+    pub highlight_worker: Option<HighlightWorker>,
 }
 
 impl ArcadeShell {
@@ -46,6 +53,13 @@ impl ArcadeShell {
         let initial_text = "# Welcome to ArcadeEdit\n\nA fast, native text editor with custom GPU-rendered desktop experience.\n\nType anywhere to begin editing live!\n• Use Arrow Keys, Home, End to navigate\n• Press Ctrl+P to open the Command Palette\n• Press Ctrl+Z / Ctrl+Y for Undo / Redo\n• Multi-cursor selections merge seamlessly\n";
 
         let focus_handle = cx.focus_handle();
+
+        let mut spans = Vec::new();
+        if let Ok(mut service) = LanguageService::new() {
+            spans = service.highlight(LanguageId::Markdown, initial_text);
+        }
+
+        let worker = HighlightWorker::spawn().ok();
 
         Self {
             document: Document::new(initial_text),
@@ -57,6 +71,9 @@ impl ArcadeShell {
             command_query: String::new(),
             commands: default_commands(),
             active_tab: 0,
+            language: LanguageId::Markdown,
+            highlight_spans: spans,
+            highlight_worker: worker,
         }
     }
 
@@ -72,6 +89,9 @@ impl ArcadeShell {
             command_query: String::new(),
             commands: default_commands(),
             active_tab: 0,
+            language: LanguageId::Rust,
+            highlight_spans: Vec::new(),
+            highlight_worker: None,
         }
     }
 
@@ -85,9 +105,26 @@ impl ArcadeShell {
         self.show_command_palette = false;
     }
 
-    /// Selects the active tab by its index.
+    /// Selects the active tab by its index and updates the target language grammar.
     pub fn select_tab(&mut self, tab: usize) {
         self.active_tab = tab;
+        self.language = match tab {
+            0 => LanguageId::Rust,
+            1 => LanguageId::Markdown,
+            _ => LanguageId::PlainText,
+        };
+        self.trigger_highlight();
+    }
+
+    /// Dispatches a background syntax highlighting request for the current document state.
+    pub fn trigger_highlight(&self) {
+        if let Some(worker) = &self.highlight_worker {
+            worker.request_highlight(
+                self.document.revision(),
+                self.language,
+                self.document.to_string(),
+            );
+        }
     }
 
     /// Inserts a string at all current cursor positions.
@@ -95,6 +132,7 @@ impl ArcadeShell {
         if let Ok((tx, new_sels)) = self.document.insert_text_at_selections(&self.selections, text) {
             self.history.push(tx);
             self.selections = new_sels;
+            self.trigger_highlight();
         }
     }
 
@@ -103,6 +141,7 @@ impl ArcadeShell {
         if let Ok((tx, new_sels)) = self.document.delete_backward_at_selections(&self.selections) {
             self.history.push(tx);
             self.selections = new_sels;
+            self.trigger_highlight();
         }
     }
 
@@ -110,6 +149,7 @@ impl ArcadeShell {
     pub fn undo(&mut self) {
         if let Ok(Some(sels)) = self.history.undo(&mut self.document) {
             self.selections = sels;
+            self.trigger_highlight();
         }
     }
 
@@ -117,12 +157,21 @@ impl ArcadeShell {
     pub fn redo(&mut self) {
         if let Ok(Some(sels)) = self.history.redo(&mut self.document) {
             self.selections = sels;
+            self.trigger_highlight();
         }
     }
 }
 
 impl Render for ArcadeShell {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if let Some(worker) = &self.highlight_worker {
+            while let Some(res) = worker.try_recv_response() {
+                if res.revision == self.document.revision() {
+                    self.highlight_spans = res.spans;
+                }
+            }
+        }
+
         let theme = self.theme;
         let show_palette = self.show_command_palette;
         let query = &self.command_query;
@@ -724,12 +773,13 @@ impl Render for ArcadeShell {
                                     ),
                             ),
                     )
-                    // Live Interactive Editor Canvas Surface
+                    // Live Interactive Editor Canvas Surface with Tree-Sitter Highlighting
                     .child(render_live_editor_surface(
                         &theme,
                         &self.document,
                         &self.selections,
                         active_filename,
+                        &self.highlight_spans,
                     ))
                     // Command Palette Modal Overlay
                     .when(show_palette, |parent| {
@@ -769,11 +819,16 @@ impl Render for ArcadeShell {
                                     .text_size(px(10.0))
                                     .child("NORMAL"),
                             )
-                            .child(
+                            .child({
+                                let lang_label = match self.language {
+                                    LanguageId::Rust => "Rust",
+                                    LanguageId::Markdown => "Markdown",
+                                    LanguageId::PlainText => "Plain Text",
+                                };
                                 div()
                                     .text_color(theme.text_muted)
-                                    .child("UTF-8  •  LF  •  Rust"),
-                            ),
+                                    .child(format!("UTF-8  •  LF  •  {}", lang_label))
+                            }),
                     )
                     // Right Position & Revision Badges
                     .child(
