@@ -49,6 +49,13 @@ pub fn default_commands() -> Vec<CommandItem> {
         ),
         CommandItem::new(
             "FILE",
+            "Open Folder...",
+            "Open a folder or project workspace into ArcadeEdit",
+            Some("Ctrl+K Ctrl+O"),
+            false,
+        ),
+        CommandItem::new(
+            "FILE",
             "Save Document",
             "Write the current buffer revision to storage",
             Some("Ctrl+S"),
