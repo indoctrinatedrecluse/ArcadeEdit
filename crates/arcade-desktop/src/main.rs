@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 //! Desktop entry point for the custom GPUI-rendered ArcadeEdit shell.
 
 use arcade_ui::ArcadeShell;

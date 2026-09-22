@@ -8,6 +8,8 @@ pub mod command_palette;
 pub mod editor_view;
 pub mod theme;
 
+use std::path::PathBuf;
+
 use arcade_core::selection::SelectionSet;
 use arcade_core::{ByteOffset, Document, History};
 use arcade_language::{HighlightSpan, HighlightWorker, LanguageId, LanguageService};
@@ -49,6 +51,12 @@ pub struct ArcadeShell {
     pub highlight_spans: Vec<HighlightSpan>,
     /// Dedicated background syntax highlighting worker.
     pub highlight_worker: Option<HighlightWorker>,
+    /// Currently opened file path on disk, if any.
+    pub current_file_path: Option<PathBuf>,
+    /// Currently opened workspace folder root, if any.
+    pub workspace_root: Option<PathBuf>,
+    /// Files discovered in the opened workspace folder.
+    pub workspace_files: Vec<PathBuf>,
 }
 
 impl ArcadeShell {
@@ -80,6 +88,9 @@ impl ArcadeShell {
             language: LanguageId::Markdown,
             highlight_spans: spans,
             highlight_worker: worker,
+            current_file_path: None,
+            workspace_root: None,
+            workspace_files: Vec::new(),
         }
     }
 
@@ -100,6 +111,9 @@ impl ArcadeShell {
             language: LanguageId::Rust,
             highlight_spans: Vec::new(),
             highlight_worker: None,
+            current_file_path: None,
+            workspace_root: None,
+            workspace_files: Vec::new(),
         }
     }
 
@@ -134,9 +148,75 @@ impl ArcadeShell {
         };
     }
 
-    /// Marks the active document as saved.
+    /// Marks the active document as saved, writing to disk if a file path is associated.
     pub fn save_document(&mut self) {
+        if let Some(path) = &self.current_file_path {
+            let _ = std::fs::write(path, self.document.to_string());
+        }
         self.history.mark_saved(self.document.revision());
+    }
+
+    /// Opens a file from disk into the active editor buffer, detecting language and updating highlights.
+    pub fn open_file(&mut self, path: PathBuf) -> Result<(), String> {
+        let content = std::fs::read_to_string(&path)
+            .map_err(|e| format!("Failed to read file {}: {e}", path.display()))?;
+
+        self.language = LanguageId::from_path(&path);
+        self.document = Document::new(&content);
+        self.selections = SelectionSet::cursor(ByteOffset(0));
+        self.history = History::new();
+        self.history.mark_saved(self.document.revision());
+        self.current_file_path = Some(path);
+        self.active_tab = 0;
+        self.trigger_highlight();
+        Ok(())
+    }
+
+    /// Prompts the user with a native file picker dialog to open a document.
+    pub fn prompt_open_file(&mut self) {
+        let mut dialog = rfd::FileDialog::new().set_title("Open Document");
+        if let Some(root) = &self.workspace_root {
+            dialog = dialog.set_directory(root);
+        }
+        if let Some(picked) = dialog.pick_file() {
+            let _ = self.open_file(picked);
+        }
+    }
+
+    /// Opens a workspace directory, discovers candidate files, and updates the explorer.
+    pub fn open_folder(&mut self, path: PathBuf) {
+        let files = arcade_workspace::discover_files(&[&path]);
+        self.workspace_root = Some(path.clone());
+        self.workspace_files = files;
+        self.show_sidebar = true;
+
+        if let Some(preferred) = self
+            .workspace_files
+            .iter()
+            .find(|f| {
+                f.file_name().map_or(false, |name| {
+                    name == "README.md"
+                        || name == "Cargo.toml"
+                        || name == "main.rs"
+                        || name == "lib.rs"
+                })
+            })
+            .cloned()
+            .or_else(|| self.workspace_files.first().cloned())
+        {
+            let _ = self.open_file(preferred);
+        }
+    }
+
+    /// Prompts the user with a native folder picker dialog to open a workspace.
+    pub fn prompt_open_folder(&mut self) {
+        let mut dialog = rfd::FileDialog::new().set_title("Open Workspace Folder");
+        if let Some(root) = &self.workspace_root {
+            dialog = dialog.set_directory(root);
+        }
+        if let Some(folder) = dialog.pick_folder() {
+            self.open_folder(folder);
+        }
     }
 
     /// Adds an additional cursor on the following line for multi-cursor editing.
@@ -225,10 +305,10 @@ impl ArcadeShell {
 
         match cmd.title {
             "Open Document..." => {
-                self.select_tab(0);
+                self.prompt_open_file();
             }
             "Open Folder..." => {
-                self.show_sidebar = true;
+                self.prompt_open_folder();
             }
             "Save Document" => {
                 self.save_document();
@@ -348,11 +428,40 @@ impl Render for ArcadeShell {
             "Revision (Clean)"
         };
 
-        let active_filename = match active_tab {
-            0 => "buffer.rs",
-            1 => "Welcome.md",
-            _ => "Cargo.toml",
+        let current_file_name = self
+            .current_file_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "buffer.rs".to_string());
+
+        let active_tab_title = if active_tab == 0 {
+            current_file_name
+        } else if active_tab == 1 {
+            "Welcome.md".to_string()
+        } else {
+            "Cargo.toml".to_string()
         };
+        let active_filename = active_tab_title.clone();
+
+        let active_tab_icon = if active_tab == 0 {
+            match self.language {
+                LanguageId::Rust => "🦀",
+                LanguageId::Markdown => "📄",
+                LanguageId::PlainText => "📝",
+            }
+        } else if active_tab == 1 {
+            "📄"
+        } else {
+            "⚙️"
+        };
+
+        let workspace_title = self
+            .workspace_root
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "ArcadeEdit".to_string());
 
         div()
             .size_full()
@@ -423,6 +532,13 @@ impl Render for ArcadeShell {
                 // Toggle Workspace Explorer (Ctrl+B)
                 if ctrl && key == "b" {
                     this.toggle_sidebar();
+                    cx.notify();
+                    return;
+                }
+
+                // Open Document (Ctrl+O)
+                if ctrl && key == "o" {
+                    this.prompt_open_file();
                     cx.notify();
                     return;
                 }
@@ -713,7 +829,7 @@ impl Render for ArcadeShell {
                                 div()
                                     .text_color(theme.syntax_cyan)
                                     .text_size(px(12.0))
-                                    .child("🦀"),
+                                    .child(active_tab_icon),
                             )
                             .child(
                                 div()
@@ -724,7 +840,11 @@ impl Render for ArcadeShell {
                                     } else {
                                         theme.text_secondary
                                     })
-                                    .child("buffer.rs"),
+                                    .child(if active_tab == 0 && self.history.is_dirty(self.document.revision()) {
+                                        format!("{} •", active_tab_title)
+                                    } else {
+                                        active_tab_title.to_string()
+                                    }),
                             )
                             .child(
                                 div()
@@ -930,10 +1050,10 @@ impl Render for ArcadeShell {
                                             div()
                                                 .text_size(px(11.0))
                                                 .text_color(theme.syntax_cyan)
-                                                .child("ArcadeEdit"),
+                                                .child(workspace_title),
                                         ),
                                 )
-                                // File Tree
+                                // File Tree & Workspace Actions
                                 .child(
                                     div()
                                         .p_2()
@@ -947,110 +1067,219 @@ impl Render for ArcadeShell {
                                                 .items_center()
                                                 .gap_2()
                                                 .px_2()
-                                                .py_1()
-                                                .text_color(theme.syntax_yellow)
-                                                .child("▾ 📁 crates"),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .pl_5()
-                                                .py_1()
-                                                .text_color(theme.syntax_yellow)
-                                                .child("▾ 📁 arcade-core"),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .pl_8()
-                                                .py_1()
+                                                .py_1p5()
+                                                .mb_1()
                                                 .rounded_lg()
-                                                .bg(theme.bg_active_glass)
+                                                .bg(theme.badge_bg)
                                                 .border_1()
-                                                .border_color(theme.border_glass)
+                                                .border_color(theme.border_subtle)
+                                                .text_size(px(11.0))
                                                 .text_color(theme.syntax_cyan)
-                                                .font_weight(gpui::FontWeight::MEDIUM)
                                                 .cursor_pointer()
+                                                .hover(|s| s.bg(theme.bg_hover_glass))
                                                 .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                                    this.select_tab(0);
+                                                    this.prompt_open_folder();
                                                     cx.notify();
                                                 }))
-                                                .child("🦀 buffer.rs"),
+                                                .child("📂 Open Folder..."),
                                         )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .pl_8()
-                                                .py_1()
-                                                .text_color(theme.text_secondary)
-                                                .hover(|s| s.bg(theme.bg_hover_glass))
-                                                .cursor_pointer()
-                                                .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                                    this.select_tab(0);
-                                                    cx.notify();
-                                                }))
-                                                .child("🦀 lib.rs"),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .pl_5()
-                                                .py_1()
-                                                .text_color(theme.text_muted)
-                                                .hover(|s| s.bg(theme.bg_hover_glass))
-                                                .child("▸ 📁 arcade-ui"),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .pl_5()
-                                                .py_1()
-                                                .text_color(theme.text_muted)
-                                                .hover(|s| s.bg(theme.bg_hover_glass))
-                                                .child("▸ 📁 arcade-desktop"),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .px_2()
-                                                .py_1()
-                                                .text_color(theme.text_secondary)
-                                                .hover(|s| s.bg(theme.bg_hover_glass))
-                                                .cursor_pointer()
-                                                .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                                    this.select_tab(2);
-                                                    cx.notify();
-                                                }))
-                                                .child("⚙️ Cargo.toml"),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .items_center()
-                                                .gap_2()
-                                                .px_2()
-                                                .py_1()
-                                                .text_color(theme.text_secondary)
-                                                .hover(|s| s.bg(theme.bg_hover_glass))
-                                                .cursor_pointer()
-                                                .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                                    this.select_tab(1);
-                                                    cx.notify();
-                                                }))
-                                                .child("📄 README.md"),
-                                        ),
+                                        .when(!self.workspace_files.is_empty(), |el| {
+                                            let root_opt = self.workspace_root.clone();
+                                            let current_opt = self.current_file_path.clone();
+                                            let file_nodes: Vec<_> = self.workspace_files.iter().take(120).map(|path| {
+                                                let rel_display = if let Some(root) = &root_opt {
+                                                    path.strip_prefix(root).unwrap_or(path).to_string_lossy().to_string()
+                                                } else {
+                                                    path.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string()
+                                                };
+                                                let display_name = rel_display.replace('\\', "/");
+                                                let is_active = current_opt.as_ref().map_or(false, |p| p == path);
+                                                let path_clone = path.clone();
+
+                                                let icon = match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
+                                                    "rs" => "🦀",
+                                                    "md" | "markdown" => "📄",
+                                                    "toml" | "json" | "yaml" | "yml" => "⚙️",
+                                                    "lock" => "🔒",
+                                                    _ => "📝",
+                                                };
+
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .px_2()
+                                                    .py_1()
+                                                    .rounded_md()
+                                                    .bg(if is_active {
+                                                        theme.bg_active_glass
+                                                    } else {
+                                                        gpui::rgba(0x00000000)
+                                                    })
+                                                    .border_1()
+                                                    .border_color(if is_active {
+                                                        theme.border_glass
+                                                    } else {
+                                                        gpui::rgba(0x00000000)
+                                                    })
+                                                    .text_color(if is_active {
+                                                        theme.syntax_cyan
+                                                    } else {
+                                                        theme.text_secondary
+                                                    })
+                                                    .hover(|s| s.bg(theme.bg_hover_glass))
+                                                    .cursor_pointer()
+                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                                        let _ = this.open_file(path_clone.clone());
+                                                        cx.notify();
+                                                    }))
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(11.0))
+                                                            .child(icon),
+                                                    )
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(11.5))
+                                                            .font_weight(if is_active {
+                                                                gpui::FontWeight::MEDIUM
+                                                            } else {
+                                                                gpui::FontWeight::NORMAL
+                                                            })
+                                                            .overflow_hidden()
+                                                            .child(display_name),
+                                                    )
+                                            }).collect();
+
+                                            el.children(file_nodes)
+                                        })
+                                        .when(self.workspace_files.is_empty(), |el| {
+                                            el.child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .px_2()
+                                                    .py_1()
+                                                    .text_color(theme.syntax_yellow)
+                                                    .child("▾ 📁 crates"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .pl_5()
+                                                    .py_1()
+                                                    .text_color(theme.syntax_yellow)
+                                                    .child("▾ 📁 arcade-core"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .pl_8()
+                                                    .py_1()
+                                                    .rounded_lg()
+                                                    .bg(theme.bg_active_glass)
+                                                    .border_1()
+                                                    .border_color(theme.border_glass)
+                                                    .text_color(theme.syntax_cyan)
+                                                    .font_weight(gpui::FontWeight::MEDIUM)
+                                                    .cursor_pointer()
+                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                        this.select_tab(0);
+                                                        cx.notify();
+                                                    }))
+                                                    .child("🦀 buffer.rs"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .pl_8()
+                                                    .py_1()
+                                                    .text_color(theme.text_secondary)
+                                                    .hover(|s| s.bg(theme.bg_hover_glass))
+                                                    .cursor_pointer()
+                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                        let p = PathBuf::from("crates/arcade-ui/src/lib.rs");
+                                                        if p.exists() {
+                                                            let _ = this.open_file(p);
+                                                        } else {
+                                                            this.select_tab(0);
+                                                        }
+                                                        cx.notify();
+                                                    }))
+                                                    .child("🦀 lib.rs"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .pl_5()
+                                                    .py_1()
+                                                    .text_color(theme.text_muted)
+                                                    .hover(|s| s.bg(theme.bg_hover_glass))
+                                                    .child("▸ 📁 arcade-ui"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .pl_5()
+                                                    .py_1()
+                                                    .text_color(theme.text_muted)
+                                                    .hover(|s| s.bg(theme.bg_hover_glass))
+                                                    .child("▸ 📁 arcade-desktop"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .px_2()
+                                                    .py_1()
+                                                    .text_color(theme.text_secondary)
+                                                    .hover(|s| s.bg(theme.bg_hover_glass))
+                                                    .cursor_pointer()
+                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                        let p = PathBuf::from("Cargo.toml");
+                                                        if p.exists() {
+                                                            let _ = this.open_file(p);
+                                                        } else {
+                                                            this.select_tab(2);
+                                                        }
+                                                        cx.notify();
+                                                    }))
+                                                    .child("⚙️ Cargo.toml"),
+                                            )
+                                            .child(
+                                                div()
+                                                    .flex()
+                                                    .items_center()
+                                                    .gap_2()
+                                                    .px_2()
+                                                    .py_1()
+                                                    .text_color(theme.text_secondary)
+                                                    .hover(|s| s.bg(theme.bg_hover_glass))
+                                                    .cursor_pointer()
+                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                                        let p = PathBuf::from("README.md");
+                                                        if p.exists() {
+                                                            let _ = this.open_file(p);
+                                                        } else {
+                                                            this.select_tab(1);
+                                                        }
+                                                        cx.notify();
+                                                    }))
+                                                    .child("📄 README.md"),
+                                            )
+                                        }),
                                 ),
                         )
                     })
@@ -1059,7 +1288,7 @@ impl Render for ArcadeShell {
                         &theme,
                         &self.document,
                         &self.selections,
-                        active_filename,
+                        &active_filename,
                         &self.highlight_spans,
                     ))
             )
@@ -1237,7 +1466,7 @@ mod tests {
         assert!(shell.commands[0].is_selected);
 
         // Execute "Save Document"
-        shell.document.insert_text(ByteOffset(0), "mutated").unwrap();
+        shell.insert_text("mutated");
         assert!(shell.history.is_dirty(shell.document.revision()));
 
         // Find "Save Document" index
@@ -1265,5 +1494,31 @@ mod tests {
 
         shell.toggle_sidebar();
         assert!(shell.show_sidebar);
+    }
+
+    #[test]
+    fn opens_file_from_disk_and_updates_state() {
+        let mut shell = ArcadeShell::test_stub();
+        let cargo_toml_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        assert!(cargo_toml_path.exists());
+
+        shell.open_file(cargo_toml_path.clone()).expect("Failed to open file");
+        assert_eq!(shell.current_file_path, Some(cargo_toml_path));
+        assert!(shell.document.to_string().contains("[package]"));
+        assert!(!shell.history.is_dirty(shell.document.revision()));
+        assert_eq!(shell.active_tab, 0);
+    }
+
+    #[test]
+    fn opens_workspace_folder_and_discovers_files() {
+        let mut shell = ArcadeShell::test_stub();
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+        shell.open_folder(manifest_dir.clone());
+        assert_eq!(shell.workspace_root, Some(manifest_dir));
+        assert!(!shell.workspace_files.is_empty());
+        assert!(shell.workspace_files.iter().any(|f| f.ends_with("Cargo.toml")));
+        assert!(shell.show_sidebar);
+        assert!(shell.current_file_path.is_some());
     }
 }
