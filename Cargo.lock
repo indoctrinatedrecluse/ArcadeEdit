@@ -199,8 +199,11 @@ name = "arcade-headless"
 version = "0.1.0"
 dependencies = [
  "arcade-core",
+ "arcade-language",
  "arcade-protocol",
  "arcade-workspace",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -218,6 +221,7 @@ name = "arcade-protocol"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]
