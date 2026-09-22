@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### 🐛 Fixed & Enhanced
+- **Interactive Command Palette & Modal Clickability**:
+  - Attached mouse down listeners (`on_mouse_down`) with `cx.listener` to all Command Palette action items, firing the chosen command, dismissing the palette, and scheduling a frame re-render via `cx.notify()`.
+  - Added click-to-dismiss backdrop listener on the outer translucent overlay.
+  - Added `cx.stop_propagation()` on the floating acrylic card to prevent accidental dismissal when clicking inside the modal.
+  - Added clickable `ESC ✕` close button in the command palette search header.
+  - Added keyboard navigation (`Up`/`Down`), live search query filtering, and `Enter` execution when the palette is active.
+- **Desktop Shell Event Dispatch**:
+  - Ensured `cx.notify()` is triggered across all tab switches, tab close actions, Add Tab buttons, and Titlebar theme toggles.
+  - Made sidebar files (`buffer.rs`, `lib.rs`, `Cargo.toml`, `README.md`) clickable to switch active tabs.
+  - Added `SolarizedTheme::light()` and instant theme toggling between Solarized Dark and Solarized Light.
+  - Auto-focused window handle so keyboard shortcuts and typing are received immediately upon launch without requiring an initial click.
+
+---
+
 ## [1.0.0] - 2026-09-22
 
 ### 🚀 Initial Proof of Concept (POC) Release
@@ -96,3 +113,4 @@ ArcadeEdit v1.0.0 marks the first usable proof-of-concept release featuring a cu
   - Optimized Windows MSVC linking by stripping debug info from external dependencies (`debug = 0`), reducing link times from >2 minutes down to sub-second.
   - Disabled redundant test harness generation on binary crates (`[[bin]] test = false`).
   - Automated test suite: **25 unit tests passing in <5 seconds**.
+

@@ -106,6 +106,40 @@ impl SolarizedTheme {
         }
     }
 
+    /// Creates the Solarized Light theme with luminous glassy sheen aesthetics.
+    pub fn light() -> Self {
+        Self {
+            bg_canvas: rgb(0xfdf6e3),
+            bg_surface_glass: rgba(0xeee8d5e8),
+            bg_card_glass: rgba(0xfdf6e3f8),
+            bg_input_glass: rgba(0xeee8d5c0),
+            bg_sheen_highlight: rgba(0x00000008),
+            bg_active_glass: rgba(0x2aa1982b),
+            bg_hover_glass: rgba(0x00000010),
+
+            border_specular_top: rgba(0xffffffcc),
+            border_glass: rgba(0x586e7529),
+            border_subtle: rgba(0x93a1a140),
+            border_focus_glow: rgb(0x2aa198),
+
+            text_primary: rgb(0x657b83),
+            text_bright: rgb(0x073642),
+            text_secondary: rgb(0x586e75),
+            text_muted: rgb(0x93a1a1),
+
+            syntax_cyan: rgb(0x2aa198),
+            syntax_blue: rgb(0x268bd2),
+            syntax_green: rgb(0x859900),
+            syntax_yellow: rgb(0xb58900),
+            syntax_orange: rgb(0xcb4b16),
+            syntax_magenta: rgb(0xd33682),
+            syntax_violet: rgb(0x6c71c4),
+
+            badge_bg: rgba(0xeee8d599),
+            badge_border: rgba(0x586e7533),
+        }
+    }
+
     /// Provides a subtle top-specular sheen highlight overlay style for panels.
     pub fn sheen_specular_top() -> Rgba {
         rgba(0xffffff38)
