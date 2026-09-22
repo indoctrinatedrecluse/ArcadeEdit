@@ -1,7 +1,7 @@
-//! Editor view surface with Solarized minimalist aesthetics and vibrant syntax highlighting.
+//! Editor view surface with Solarized minimalist aesthetics, live document rendering, and vibrant syntax highlighting.
 
 use crate::theme::SolarizedTheme;
-use arcade_core::Document;
+use arcade_core::{Document, SelectionSet};
 use gpui::{div, prelude::*, px, Div, IntoElement};
 
 /// Represents a syntax-highlighted visual token.
@@ -33,185 +33,129 @@ pub struct TokenSpan {
     /// The grammatical token classification.
     pub kind: SyntaxKind,
     /// The raw string content of this span.
-    pub text: &'static str,
+    pub text: String,
 }
 
-/// A single rendered line containing highlighted spans.
-#[derive(Clone, Debug)]
-pub struct HighlightedLine {
-    /// 1-based physical line number in the document.
-    pub line_number: usize,
-    /// Whether the editor cursor / active line highlight resides on this line.
-    pub is_active: bool,
-    /// The ordered list of tokenized spans forming this line.
-    pub tokens: Vec<TokenSpan>,
-}
+/// Fast lexical tokenizer to apply vibrant Solarized colors to live document lines.
+pub fn tokenize_line(line_str: &str) -> Vec<TokenSpan> {
+    if line_str.trim_start().starts_with("//") || line_str.trim_start().starts_with("#") {
+        return vec![TokenSpan {
+            kind: SyntaxKind::Comment,
+            text: line_str.to_string(),
+        }];
+    }
 
-/// Returns rich, vibrant Solarized demonstration code showing off the syntax palette.
-pub fn sample_highlighted_lines() -> Vec<HighlightedLine> {
-    vec![
-        HighlightedLine {
-            line_number: 1,
-            is_active: false,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Comment, text: "//! ArcadeEdit native core runtime — fast, native, text-first." },
-            ],
-        },
-        HighlightedLine {
-            line_number: 2,
-            is_active: false,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Keyword, text: "use " },
-                TokenSpan { kind: SyntaxKind::Plain, text: "arcade_core::{" },
-                TokenSpan { kind: SyntaxKind::Type, text: "Document" },
-                TokenSpan { kind: SyntaxKind::Plain, text: ", " },
-                TokenSpan { kind: SyntaxKind::Type, text: "TextEdit" },
-                TokenSpan { kind: SyntaxKind::Plain, text: ", " },
-                TokenSpan { kind: SyntaxKind::Type, text: "ByteOffset" },
-                TokenSpan { kind: SyntaxKind::Plain, text: "};" },
-            ],
-        },
-        HighlightedLine {
-            line_number: 3,
-            is_active: false,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Keyword, text: "use " },
-                TokenSpan { kind: SyntaxKind::Plain, text: "ropey::" },
-                TokenSpan { kind: SyntaxKind::Type, text: "Rope" },
-                TokenSpan { kind: SyntaxKind::Plain, text: ";" },
-            ],
-        },
-        HighlightedLine {
-            line_number: 4,
-            is_active: false,
-            tokens: vec![],
-        },
-        HighlightedLine {
-            line_number: 5,
-            is_active: false,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Keyword, text: "pub struct " },
-                TokenSpan { kind: SyntaxKind::Type, text: "EditorBuffer " },
-                TokenSpan { kind: SyntaxKind::Punctuation, text: "{" },
-            ],
-        },
-        HighlightedLine {
-            line_number: 6,
-            is_active: false,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Plain, text: "    " },
-                TokenSpan { kind: SyntaxKind::Keyword, text: "pub " },
-                TokenSpan { kind: SyntaxKind::Plain, text: "doc: " },
-                TokenSpan { kind: SyntaxKind::Type, text: "Document" },
-                TokenSpan { kind: SyntaxKind::Punctuation, text: "," },
-            ],
-        },
-        HighlightedLine {
-            line_number: 7,
-            is_active: false,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Plain, text: "    " },
-                TokenSpan { kind: SyntaxKind::Keyword, text: "pub " },
-                TokenSpan { kind: SyntaxKind::Plain, text: "cursors: " },
-                TokenSpan { kind: SyntaxKind::Type, text: "Vec" },
-                TokenSpan { kind: SyntaxKind::Punctuation, text: "<" },
-                TokenSpan { kind: SyntaxKind::Type, text: "ByteOffset" },
-                TokenSpan { kind: SyntaxKind::Punctuation, text: ">," },
-            ],
-        },
-        HighlightedLine {
-            line_number: 8,
-            is_active: false,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Plain, text: "    " },
-                TokenSpan { kind: SyntaxKind::Keyword, text: "pub " },
-                TokenSpan { kind: SyntaxKind::Plain, text: "glass_sheen_enabled: " },
-                TokenSpan { kind: SyntaxKind::Type, text: "bool" },
-                TokenSpan { kind: SyntaxKind::Punctuation, text: "," },
-            ],
-        },
-        HighlightedLine {
-            line_number: 9,
-            is_active: false,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Punctuation, text: "}" },
-            ],
-        },
-        HighlightedLine {
-            line_number: 10,
-            is_active: false,
-            tokens: vec![],
-        },
-        HighlightedLine {
-            line_number: 11,
-            is_active: true,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Keyword, text: "impl " },
-                TokenSpan { kind: SyntaxKind::Type, text: "EditorBuffer " },
-                TokenSpan { kind: SyntaxKind::Punctuation, text: "{" },
-            ],
-        },
-        HighlightedLine {
-            line_number: 12,
-            is_active: false,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Plain, text: "    " },
-                TokenSpan { kind: SyntaxKind::Keyword, text: "pub fn " },
-                TokenSpan { kind: SyntaxKind::Function, text: "apply_transaction" },
-                TokenSpan { kind: SyntaxKind::Punctuation, text: "(" },
-                TokenSpan { kind: SyntaxKind::Operator, text: "&mut " },
-                TokenSpan { kind: SyntaxKind::Plain, text: "self, edit: " },
-                TokenSpan { kind: SyntaxKind::Type, text: "TextEdit" },
-                TokenSpan { kind: SyntaxKind::Punctuation, text: ") -> " },
-                TokenSpan { kind: SyntaxKind::Type, text: "Result" },
-                TokenSpan { kind: SyntaxKind::Punctuation, text: "<(), ()> {" },
-            ],
-        },
-        HighlightedLine {
-            line_number: 13,
-            is_active: false,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Plain, text: "        " },
-                TokenSpan { kind: SyntaxKind::Keyword, text: "let " },
-                TokenSpan { kind: SyntaxKind::Plain, text: "revision = self.doc." },
-                TokenSpan { kind: SyntaxKind::Function, text: "revision" },
-                TokenSpan { kind: SyntaxKind::Punctuation, text: "();" },
-            ],
-        },
-        HighlightedLine {
-            line_number: 14,
-            is_active: false,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Plain, text: "        " },
-                TokenSpan { kind: SyntaxKind::Plain, text: "println!(" },
-                TokenSpan { kind: SyntaxKind::StringLiteral, text: "\"✨ Applied edit at revision {}\"" },
-                TokenSpan { kind: SyntaxKind::Punctuation, text: ", revision.0);" },
-            ],
-        },
-        HighlightedLine {
-            line_number: 15,
-            is_active: false,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Plain, text: "        " },
-                TokenSpan { kind: SyntaxKind::Type, text: "Ok" },
-                TokenSpan { kind: SyntaxKind::Punctuation, text: "(())" },
-            ],
-        },
-        HighlightedLine {
-            line_number: 16,
-            is_active: false,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Plain, text: "    }" },
-            ],
-        },
-        HighlightedLine {
-            line_number: 17,
-            is_active: false,
-            tokens: vec![
-                TokenSpan { kind: SyntaxKind::Punctuation, text: "}" },
-            ],
-        },
-    ]
+    let mut tokens = Vec::new();
+    let chars: Vec<char> = line_str.chars().collect();
+    let len = chars.len();
+    let mut i = 0;
+
+    while i < len {
+        let ch = chars[i];
+
+        // Whitespace
+        if ch.is_whitespace() {
+            let mut end = i + 1;
+            while end < len && chars[end].is_whitespace() {
+                end += 1;
+            }
+            tokens.push(TokenSpan {
+                kind: SyntaxKind::Plain,
+                text: chars[i..end].iter().collect(),
+            });
+            i = end;
+            continue;
+        }
+
+        // Line comment
+        if ch == '/' && i + 1 < len && chars[i + 1] == '/' {
+            tokens.push(TokenSpan {
+                kind: SyntaxKind::Comment,
+                text: chars[i..].iter().collect(),
+            });
+            break;
+        }
+
+        // String literal
+        if ch == '"' || ch == '\'' {
+            let quote = ch;
+            let mut end = i + 1;
+            let mut escaped = false;
+            while end < len {
+                if escaped {
+                    escaped = false;
+                } else if chars[end] == '\\' {
+                    escaped = true;
+                } else if chars[end] == quote {
+                    end += 1;
+                    break;
+                }
+                end += 1;
+            }
+            tokens.push(TokenSpan {
+                kind: SyntaxKind::StringLiteral,
+                text: chars[i..end].iter().collect(),
+            });
+            i = end;
+            continue;
+        }
+
+        // Numbers
+        if ch.is_ascii_digit() {
+            let mut end = i + 1;
+            while end < len && (chars[end].is_ascii_alphanumeric() || chars[end] == '.') {
+                end += 1;
+            }
+            tokens.push(TokenSpan {
+                kind: SyntaxKind::Number,
+                text: chars[i..end].iter().collect(),
+            });
+            i = end;
+            continue;
+        }
+
+        // Identifiers and Keywords
+        if ch.is_alphabetic() || ch == '_' {
+            let mut end = i + 1;
+            while end < len && (chars[end].is_alphanumeric() || chars[end] == '_') {
+                end += 1;
+            }
+            let word: String = chars[i..end].iter().collect();
+
+            let kind = match word.as_str() {
+                "use" | "pub" | "fn" | "struct" | "enum" | "impl" | "let" | "mut" | "if" | "else"
+                | "match" | "for" | "while" | "loop" | "return" | "break" | "continue" | "mod"
+                | "trait" | "type" | "const" | "static" | "as" | "where" | "async" | "await" => {
+                    SyntaxKind::Keyword
+                }
+                "self" | "super" | "crate" => SyntaxKind::Operator,
+                "true" | "false" | "Some" | "None" | "Ok" | "Err" => SyntaxKind::Number,
+                w if w.chars().next().map_or(false, |c| c.is_uppercase()) => SyntaxKind::Type,
+                _ if end < len && chars[end] == '(' => SyntaxKind::Function,
+                _ => SyntaxKind::Plain,
+            };
+
+            tokens.push(TokenSpan { kind, text: word });
+            i = end;
+            continue;
+        }
+
+        // Punctuation and Operators
+        let kind = match ch {
+            '+' | '-' | '*' | '/' | '%' | '=' | '!' | '<' | '>' | '&' | '|' | '^' => {
+                SyntaxKind::Operator
+            }
+            '{' | '}' | '(' | ')' | '[' | ']' | ';' | ',' | '.' | ':' => SyntaxKind::Punctuation,
+            _ => SyntaxKind::Plain,
+        };
+        tokens.push(TokenSpan {
+            kind,
+            text: ch.to_string(),
+        });
+        i += 1;
+    }
+
+    tokens
 }
 
 /// Renders the token span with its corresponding Solarized color.
@@ -228,15 +172,29 @@ pub fn render_token(theme: &SolarizedTheme, token: &TokenSpan) -> Div {
         SyntaxKind::Plain => theme.text_primary,
     };
 
-    div().text_color(color).child(token.text)
+    div().text_color(color).child(token.text.clone())
 }
 
-/// Renders the full editor surface with gutter, glassy active line sheen, and vibrant tokens.
-pub fn render_editor_surface(
+/// Renders the live interactive editor surface for a document and its multi-cursor selection set.
+pub fn render_live_editor_surface(
     theme: &SolarizedTheme,
-    _document: &Document,
-    lines: &[HighlightedLine],
+    document: &Document,
+    selections: &SelectionSet,
+    active_filename: &str,
 ) -> impl IntoElement {
+    let rope = document.rope();
+    let num_lines = document.len_lines();
+
+    // Map which lines currently hold a cursor head, and where on the line (in char index)
+    let mut cursors_by_line: Vec<(usize, usize)> = Vec::new();
+    for sel in selections.as_slice() {
+        let line_idx = document.line_of_byte(sel.head);
+        let line_start_char = rope.line_to_char(line_idx);
+        let head_char = document.byte_to_char(sel.head).unwrap_or(0);
+        let col_char = head_char.saturating_sub(line_start_char);
+        cursors_by_line.push((line_idx, col_char));
+    }
+
     div()
         .flex_1()
         .flex()
@@ -256,29 +214,15 @@ pub fn render_editor_surface(
                 .border_color(theme.border_specular_top)
                 .text_size(px(12.0))
                 .gap_2()
-                .child(
-                    div()
-                        .text_color(theme.syntax_cyan)
-                        .child("crates"),
-                )
+                .child(div().text_color(theme.syntax_cyan).child("ArcadeEdit"))
                 .child(div().text_color(theme.text_muted).child("›"))
-                .child(
-                    div()
-                        .text_color(theme.syntax_cyan)
-                        .child("arcade-core"),
-                )
-                .child(div().text_color(theme.text_muted).child("›"))
-                .child(
-                    div()
-                        .text_color(theme.syntax_cyan)
-                        .child("src"),
-                )
+                .child(div().text_color(theme.syntax_cyan).child("workspace"))
                 .child(div().text_color(theme.text_muted).child("›"))
                 .child(
                     div()
                         .text_color(theme.text_bright)
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child("buffer.rs"),
+                        .child(active_filename.to_string()),
                 )
                 .child(
                     div()
@@ -291,7 +235,7 @@ pub fn render_editor_surface(
                         .border_color(theme.border_glass)
                         .text_size(px(10.5))
                         .text_color(theme.syntax_green)
-                        .child("● Rust 2021"),
+                        .child(format!("● {} cursors", selections.len())),
                 ),
         )
         // Main Editor Code Canvas
@@ -307,8 +251,18 @@ pub fn render_editor_surface(
                         .py_3()
                         .flex()
                         .flex_col()
-                        .children(lines.iter().map(|line| {
-                            let is_active = line.is_active;
+                        .children((0..num_lines).map(|line_idx| {
+                            let line_slice = rope.line(line_idx);
+                            let line_str = line_slice.to_string();
+                            // Strip line endings for clean rendering
+                            let clean_str = line_str.trim_end_matches(&['\r', '\n'][..]);
+
+                            // Check if this line has any cursor
+                            let matching_cursor = cursors_by_line
+                                .iter()
+                                .find(|(l, _)| *l == line_idx)
+                                .map(|(_, col)| *col);
+                            let is_active = matching_cursor.is_some();
 
                             div()
                                 .flex()
@@ -340,35 +294,54 @@ pub fn render_editor_surface(
                                         } else {
                                             theme.text_muted
                                         })
-                                        .child(format!("{}", line.line_number)),
+                                        .child(format!("{}", line_idx + 1)),
                                 )
-                                // Highlighted Code Spans
-                                .child(
-                                    div()
+                                // Highlighted Code Spans and Cursor
+                                .child({
+                                    let mut line_container = div()
                                         .flex()
                                         .items_center()
-                                        .text_size(px(13.0))
-                                        .children(
-                                            line.tokens
-                                                .iter()
-                                                .map(|tok| render_token(theme, tok)),
-                                        )
-                                        // Active Cursor Indicator
-                                        .when(is_active, |row| {
-                                            row.child(
-                                                div()
-                                                    .w(px(2.0))
-                                                    .h(px(16.0))
-                                                    .ml_0p5()
-                                                    .bg(theme.syntax_cyan)
-                                                    .rounded_full()
-                                                    .shadow_sm(),
-                                            )
-                                        }),
-                                )
+                                        .text_size(px(13.0));
+
+                                    if let Some(cursor_col) = matching_cursor {
+                                        let chars: Vec<char> = clean_str.chars().collect();
+                                        let col = std::cmp::min(cursor_col, chars.len());
+
+                                        let before_str: String = chars[..col].iter().collect();
+                                        let after_str: String = chars[col..].iter().collect();
+
+                                        let before_tokens = tokenize_line(&before_str);
+                                        let after_tokens = tokenize_line(&after_str);
+
+                                        for tok in &before_tokens {
+                                            line_container = line_container.child(render_token(theme, tok));
+                                        }
+
+                                        // Glowing Cyan Vertical Cursor
+                                        line_container = line_container.child(
+                                            div()
+                                                .w(px(2.0))
+                                                .h(px(16.0))
+                                                .bg(theme.syntax_cyan)
+                                                .rounded_full()
+                                                .shadow_sm(),
+                                        );
+
+                                        for tok in &after_tokens {
+                                            line_container = line_container.child(render_token(theme, tok));
+                                        }
+                                    } else {
+                                        let tokens = tokenize_line(clean_str);
+                                        for tok in &tokens {
+                                            line_container = line_container.child(render_token(theme, tok));
+                                        }
+                                    }
+
+                                    line_container
+                                })
                         })),
                 )
-                // Glassy Minimap Placeholder / Scroll Indicator
+                // Glassy Scroll / Minimap Rail
                 .child(
                     div()
                         .w(px(48.0))
@@ -392,4 +365,3 @@ pub fn render_editor_surface(
                 ),
         )
 }
-

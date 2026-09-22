@@ -1,17 +1,18 @@
 //! The custom ArcadeEdit desktop UI boundary.
 //!
-//! GPUI is intentionally introduced here, powering an original Solarized
-//! minimalist interface with glassy sheen layers, macOS/MAUI-inspired modals,
-//! and vibrant syntax highlighting.
+//! GPUI powers an original Solarized minimalist interface with glassy sheen layers,
+//! macOS/MAUI-inspired modals, vibrant live syntax highlighting, and responsive
+//! multi-cursor keyboard editing.
 
 pub mod command_palette;
 pub mod editor_view;
 pub mod theme;
 
-use arcade_core::Document;
+use arcade_core::selection::SelectionSet;
+use arcade_core::{ByteOffset, Document, History};
 use command_palette::{default_commands, render_command_palette, CommandItem};
-use editor_view::{render_editor_surface, sample_highlighted_lines, HighlightedLine};
-use gpui::{div, prelude::*, px, Context, IntoElement, Render, Window};
+use editor_view::render_live_editor_surface;
+use gpui::{div, prelude::*, px, Context, FocusHandle, IntoElement, Render, Window};
 use theme::SolarizedTheme;
 
 /// Identifies the custom visual system used by the desktop application.
@@ -21,6 +22,12 @@ pub const DESIGN_SYSTEM_NAME: &str = "ArcadeEdit Solarized Glass";
 pub struct ArcadeShell {
     /// Active document buffer representation.
     pub document: Document,
+    /// Multi-cursor selections across the active document.
+    pub selections: SelectionSet,
+    /// Undo and redo history manager.
+    pub history: History,
+    /// Optional focus handle for receiving keyboard events.
+    pub focus_handle: Option<FocusHandle>,
     /// Theme colors and sheen tokens.
     pub theme: SolarizedTheme,
     /// Controls visibility of the macOS/MAUI Command Palette overlay.
@@ -29,24 +36,41 @@ pub struct ArcadeShell {
     pub command_query: String,
     /// Available command actions displayed in the palette.
     pub commands: Vec<CommandItem>,
-    /// Sample highlighted code lines demonstrated in the editor view.
-    pub highlighted_lines: Vec<HighlightedLine>,
     /// Zero-based index of the active document tab.
     pub active_tab: usize,
 }
 
 impl ArcadeShell {
-    /// Creates the initial shell configured with Solarized Dark and glassy sheen aesthetics.
-    pub fn welcome() -> Self {
-        let initial_text = "# Welcome to ArcadeEdit\n\nA native text editor with one shared core.\n\n• GPUI renders this custom desktop surface with Solarized glassmorphism.\n• arcade-headless runs without a display or GPU.\n• The document model is Ropey-backed and revisioned.\n";
+    /// Creates the initial shell configured with Solarized Dark and live interactive keyboard input.
+    pub fn welcome(cx: &mut Context<Self>) -> Self {
+        let initial_text = "# Welcome to ArcadeEdit\n\nA fast, native text editor with custom GPU-rendered desktop experience.\n\nType anywhere to begin editing live!\n• Use Arrow Keys, Home, End to navigate\n• Press Ctrl+P to open the Command Palette\n• Press Ctrl+Z / Ctrl+Y for Undo / Redo\n• Multi-cursor selections merge seamlessly\n";
+
+        let focus_handle = cx.focus_handle();
 
         Self {
             document: Document::new(initial_text),
+            selections: SelectionSet::cursor(ByteOffset(0)),
+            history: History::new(),
+            focus_handle: Some(focus_handle),
             theme: SolarizedTheme::dark(),
             show_command_palette: true,
             command_query: String::new(),
             commands: default_commands(),
-            highlighted_lines: sample_highlighted_lines(),
+            active_tab: 0,
+        }
+    }
+
+    /// Creates a shell without a window focus handle (suitable for unit tests).
+    pub fn test_stub() -> Self {
+        Self {
+            document: Document::new("# ArcadeEdit Test Document\n"),
+            selections: SelectionSet::cursor(ByteOffset(0)),
+            history: History::new(),
+            focus_handle: None,
+            theme: SolarizedTheme::dark(),
+            show_command_palette: true,
+            command_query: String::new(),
+            commands: default_commands(),
             active_tab: 0,
         }
     }
@@ -65,6 +89,36 @@ impl ArcadeShell {
     pub fn select_tab(&mut self, tab: usize) {
         self.active_tab = tab;
     }
+
+    /// Inserts a string at all current cursor positions.
+    pub fn insert_text(&mut self, text: &str) {
+        if let Ok((tx, new_sels)) = self.document.insert_text_at_selections(&self.selections, text) {
+            self.history.push(tx);
+            self.selections = new_sels;
+        }
+    }
+
+    /// Deletes backward (Backspace) across all current cursor selections.
+    pub fn delete_backward(&mut self) {
+        if let Ok((tx, new_sels)) = self.document.delete_backward_at_selections(&self.selections) {
+            self.history.push(tx);
+            self.selections = new_sels;
+        }
+    }
+
+    /// Performs an undo operation and restores prior selections.
+    pub fn undo(&mut self) {
+        if let Ok(Some(sels)) = self.history.undo(&mut self.document) {
+            self.selections = sels;
+        }
+    }
+
+    /// Performs a redo operation and restores resulting selections.
+    pub fn redo(&mut self) {
+        if let Ok(Some(sels)) = self.history.redo(&mut self.document) {
+            self.selections = sels;
+        }
+    }
 }
 
 impl Render for ArcadeShell {
@@ -73,8 +127,27 @@ impl Render for ArcadeShell {
         let show_palette = self.show_command_palette;
         let query = &self.command_query;
         let commands = &self.commands;
-        let lines = &self.highlighted_lines;
         let active_tab = self.active_tab;
+
+        // Current primary cursor coordinates for the status bar
+        let primary_head = self.selections.primary().head;
+        let primary_line = self.document.line_of_byte(primary_head);
+        let line_start_char = self.document.rope().line_to_char(primary_line);
+        let head_char = self.document.byte_to_char(primary_head).unwrap_or(0);
+        let primary_col = head_char.saturating_sub(line_start_char) + 1;
+        let line_status = format!("Ln {}, Col {}", primary_line + 1, primary_col);
+
+        let dirty_status = if self.history.is_dirty(self.document.revision()) {
+            "Revision (Modified)"
+        } else {
+            "Revision (Clean)"
+        };
+
+        let active_filename = match active_tab {
+            0 => "buffer.rs",
+            1 => "Welcome.md",
+            _ => "Cargo.toml",
+        };
 
         div()
             .size_full()
@@ -82,6 +155,108 @@ impl Render for ArcadeShell {
             .flex_col()
             .bg(theme.bg_canvas)
             .text_color(theme.text_primary)
+            // Register Focus Handle and Interactive Keyboard Handler
+            .when_some(self.focus_handle.clone(), |el, fh| el.track_focus(&fh))
+            .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
+                let key = event.keystroke.key.as_str();
+                let ctrl = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
+                let shift = event.keystroke.modifiers.shift;
+
+                // Toggle Command Palette
+                if ctrl && key == "p" {
+                    this.toggle_command_palette();
+                    cx.notify();
+                    return;
+                }
+
+                // Undo
+                if ctrl && key == "z" && !shift {
+                    this.undo();
+                    cx.notify();
+                    return;
+                }
+
+                // Redo (Ctrl+Y or Ctrl+Shift+Z)
+                if (ctrl && key == "y") || (ctrl && key == "z" && shift) {
+                    this.redo();
+                    cx.notify();
+                    return;
+                }
+
+                // Escape
+                if key == "escape" {
+                    if this.show_command_palette {
+                        this.close_command_palette();
+                    } else {
+                        this.selections = SelectionSet::single(this.selections.primary().collapse());
+                    }
+                    cx.notify();
+                    return;
+                }
+
+                // Navigation: Left / Right
+                if key == "left" {
+                    this.selections = this.selections.move_left(this.document.rope(), shift);
+                    cx.notify();
+                    return;
+                }
+                if key == "right" {
+                    this.selections = this.selections.move_right(this.document.rope(), shift);
+                    cx.notify();
+                    return;
+                }
+
+                // Navigation: Up / Down
+                if key == "up" {
+                    this.selections = this.selections.move_up(this.document.rope(), shift);
+                    cx.notify();
+                    return;
+                }
+                if key == "down" {
+                    this.selections = this.selections.move_down(this.document.rope(), shift);
+                    cx.notify();
+                    return;
+                }
+
+                // Navigation: Home / End
+                if key == "home" {
+                    this.selections = this.selections.move_to_line_start(this.document.rope(), shift);
+                    cx.notify();
+                    return;
+                }
+                if key == "end" {
+                    this.selections = this.selections.move_to_line_end(this.document.rope(), shift);
+                    cx.notify();
+                    return;
+                }
+
+                // Backspace
+                if key == "backspace" {
+                    this.delete_backward();
+                    cx.notify();
+                    return;
+                }
+
+                // Enter / Return
+                if key == "enter" {
+                    this.insert_text("\n");
+                    cx.notify();
+                    return;
+                }
+
+                // Tab
+                if key == "tab" {
+                    this.insert_text("    ");
+                    cx.notify();
+                    return;
+                }
+
+                // Text Insertion (Printable characters without Control/Alt)
+                if !ctrl && !event.keystroke.modifiers.alt && key.chars().count() == 1 {
+                    this.insert_text(key);
+                    cx.notify();
+                }
+            }))
             // =================================================================
             // 1. TOP HEADER / TITLEBAR (Glassy Sheen & macOS/MAUI Title Styling)
             // =================================================================
@@ -409,7 +584,7 @@ impl Render for ArcadeShell {
                     ),
             )
             // =================================================================
-            // 3. MAIN WORKSPACE (Sidebar + Editor Surface)
+            // 3. MAIN WORKSPACE (Sidebar + Live Editor Surface)
             // =================================================================
             .child(
                 div()
@@ -457,7 +632,6 @@ impl Render for ArcadeShell {
                                     .flex_col()
                                     .gap_0p5()
                                     .text_size(px(12.5))
-                                    // crates/ folder
                                     .child(
                                         div()
                                             .flex()
@@ -468,7 +642,6 @@ impl Render for ArcadeShell {
                                             .text_color(theme.syntax_yellow)
                                             .child("▾ 📁 crates"),
                                     )
-                                    // arcade-core/
                                     .child(
                                         div()
                                             .flex()
@@ -479,7 +652,6 @@ impl Render for ArcadeShell {
                                             .text_color(theme.syntax_yellow)
                                             .child("▾ 📁 arcade-core"),
                                     )
-                                    // buffer.rs (Selected)
                                     .child(
                                         div()
                                             .flex()
@@ -495,7 +667,6 @@ impl Render for ArcadeShell {
                                             .font_weight(gpui::FontWeight::MEDIUM)
                                             .child("🦀 buffer.rs"),
                                     )
-                                    // lib.rs
                                     .child(
                                         div()
                                             .flex()
@@ -507,7 +678,6 @@ impl Render for ArcadeShell {
                                             .hover(|s| s.bg(theme.bg_hover_glass))
                                             .child("🦀 lib.rs"),
                                     )
-                                    // arcade-ui/
                                     .child(
                                         div()
                                             .flex()
@@ -519,7 +689,6 @@ impl Render for ArcadeShell {
                                             .hover(|s| s.bg(theme.bg_hover_glass))
                                             .child("▸ 📁 arcade-ui"),
                                     )
-                                    // arcade-desktop/
                                     .child(
                                         div()
                                             .flex()
@@ -531,7 +700,6 @@ impl Render for ArcadeShell {
                                             .hover(|s| s.bg(theme.bg_hover_glass))
                                             .child("▸ 📁 arcade-desktop"),
                                     )
-                                    // Root files
                                     .child(
                                         div()
                                             .flex()
@@ -556,8 +724,13 @@ impl Render for ArcadeShell {
                                     ),
                             ),
                     )
-                    // Editor Canvas Surface
-                    .child(render_editor_surface(&theme, &self.document, lines))
+                    // Live Interactive Editor Canvas Surface
+                    .child(render_live_editor_surface(
+                        &theme,
+                        &self.document,
+                        &self.selections,
+                        active_filename,
+                    ))
                     // Command Palette Modal Overlay
                     .when(show_palette, |parent| {
                         parent.child(render_command_palette(&theme, query, commands))
@@ -611,7 +784,7 @@ impl Render for ArcadeShell {
                             .child(
                                 div()
                                     .text_color(theme.text_secondary)
-                                    .child("Ln 11, Col 24"),
+                                    .child(line_status),
                             )
                             .child(
                                 div()
@@ -621,7 +794,7 @@ impl Render for ArcadeShell {
                             .child(
                                 div()
                                     .text_color(theme.syntax_green)
-                                    .child("Revision 1 (Clean)"),
+                                    .child(dirty_status),
                             ),
                     ),
             )
@@ -634,7 +807,7 @@ mod tests {
 
     #[test]
     fn initializes_arcade_shell_with_solarized_glass_defaults() {
-        let shell = ArcadeShell::welcome();
+        let shell = ArcadeShell::test_stub();
         assert_eq!(shell.active_tab, 0);
         assert!(shell.show_command_palette);
         assert!(!shell.commands.is_empty());
@@ -643,7 +816,7 @@ mod tests {
 
     #[test]
     fn toggles_command_palette_visibility() {
-        let mut shell = ArcadeShell::welcome();
+        let mut shell = ArcadeShell::test_stub();
         assert!(shell.show_command_palette);
 
         shell.toggle_command_palette();
@@ -658,7 +831,7 @@ mod tests {
 
     #[test]
     fn switches_active_tabs() {
-        let mut shell = ArcadeShell::welcome();
+        let mut shell = ArcadeShell::test_stub();
         assert_eq!(shell.active_tab, 0);
 
         shell.select_tab(1);
@@ -666,5 +839,20 @@ mod tests {
 
         shell.select_tab(2);
         assert_eq!(shell.active_tab, 2);
+    }
+
+    #[test]
+    fn performs_interactive_typing_and_undo_cycles() {
+        let mut shell = ArcadeShell::test_stub();
+        let initial_text = shell.document.to_string();
+
+        shell.insert_text("let x = 42;\n");
+        assert_ne!(shell.document.to_string(), initial_text);
+
+        shell.undo();
+        assert_eq!(shell.document.to_string(), initial_text);
+
+        shell.redo();
+        assert_ne!(shell.document.to_string(), initial_text);
     }
 }
