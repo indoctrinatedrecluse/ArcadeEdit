@@ -27,15 +27,25 @@ ArcadeEdit v1.0.0 marks the first usable proof-of-concept release featuring a cu
   - Smooth directional navigation (`Arrow Keys`, `Home`, `End`) with `Shift` selection expansion.
   - Multi-cursor extension shortcut (`Ctrl+D`).
   - Undo and Redo keystroke shortcuts (`Ctrl+Z`, `Ctrl+Y` / `Ctrl+Shift+Z`).
+- **Native OS File & Folder Pickers (`rfd`)**:
+  - **"Open Document..." (`Ctrl+O` or Command Palette)**: Opens native cross-platform file picker, loads file content into active buffer, infers grammar (`LanguageId::from_path`), and updates tab title.
+  - **"Open Folder..." (`Ctrl+K Ctrl+O`, Command Palette, or Explorer Header)**: Opens native folder picker, discovers project candidate files via `arcade_workspace::discover_files`, opens the primary project document, and populates the sidebar.
+  - **File-Backed Persistence**: Saving (`Ctrl+S` or "Save Document") writes edits directly back to disk for opened files and updates revision status.
+- **Dynamic Workspace File Explorer**:
+  - Displays the active workspace directory name.
+  - Dynamically lists project files with categorized icons (`🦀` Rust, `📄` Markdown/text, `⚙️` Config/TOML, `🔒` Locks), active row sheen, and click-to-open handlers.
+  - Dedicated **"📂 Open Folder..."** quick action button.
+- **Silent Windows Execution**:
+  - Configured `#![windows_subsystem = "windows"]` on `arcade-desktop` entry point to suppress background command prompt / terminal windows when launching on Windows.
 - **macOS / MAUI Floating Command Palette**:
   - Centered glassy modal overlay triggered via `Ctrl+P` or header search pill.
   - Interactive mouse event handling: every command item is clickable, executes immediately, and closes the palette.
   - Outside backdrop click-to-dismiss with event isolation on the modal card.
   - Dedicated `ESC ✕` close button in the header.
   - Dynamic keyboard search with live character filtering, Backspace correction, visual caret (`▌`), and arrow key (`↑`/`↓`) navigation with `Enter` execution.
-  - Built-in commands: **"Open Folder..."** (`Ctrl+K Ctrl+O`), "Open Document...", "Save Document", "Multi-Cursor: Add Next Occurrence", "Toggle Workspace File Explorer", "Arcade Headless: Preview Edits", "Open Integrated Terminal with `ir`", and "Toggle Solarized Sheen Contrast".
+  - Built-in commands: **"Open Document..."** (`Ctrl+O`), **"Open Folder..."** (`Ctrl+K Ctrl+O`), "Save Document", "Multi-Cursor: Add Next Occurrence", "Toggle Workspace File Explorer", "Arcade Headless: Preview Edits", "Open Integrated Terminal with `ir`", and "Toggle Solarized Sheen Contrast".
 - **Responsive Workspace & Interactive Panels**:
-  - Interactive tabs (`buffer.rs`, `Welcome.md`, `Cargo.toml`) with active indicator sheen, close buttons (`×`), and Add Tab button (`+`).
+  - Interactive tabs (`buffer.rs`, `Welcome.md`, `Cargo.toml`) with dynamic file title, active indicator sheen, dirty indicator (`•`), close buttons (`×`), and Add Tab button (`+`).
   - Interactive file explorer tree with clickable files (`buffer.rs`, `lib.rs`, `Cargo.toml`, `README.md`) to switch active tabs.
   - Collapsible file explorer pane (`Ctrl+B` or header toggle).
   - Status bar with interactive `NORMAL` mode pill (opens palette) and dirty revision badge (click to save).
@@ -105,5 +115,5 @@ ArcadeEdit v1.0.0 marks the first usable proof-of-concept release featuring a cu
 - **Build Optimization**:
   - Optimized Windows MSVC linking by stripping debug info from external dependencies (`debug = 0`), reducing link times from >2 minutes down to sub-second.
   - Disabled redundant test harness generation on binary crates (`[[bin]] test = false`).
-  - Automated test suite: **25 unit tests passing in <5 seconds**.
+  - Automated test suite: **30 unit tests passing in <5 seconds**.
 
