@@ -138,20 +138,22 @@ The built-in terminal will make `ir` immediately available as a companion workfl
 
 ## 🗺️ Delivery sequence
 
-1. 🧠 Scaffold the Cargo workspace and make `arcade-core` independently testable.
-2. ✍️ Implement Ropey-backed documents, transactions, selections, undo/redo, and file persistence.
-3. 🎨 Add the GPUI desktop shell and a virtualized single-document editor view.
-4. 🌳 Add Tree-sitter parsing/highlighting on background workers.
-5. ⚙️ Ship the first `arcade-headless` commands from the same core.
-6. 🛠️ Add the integrated terminal and a versioned `ir` bundle/documentation pipeline.
-7. 🐳 Package, benchmark, harden container behavior, and define huge-file limits.
+1. ✅ 🧠 Scaffold the Cargo workspace and make `arcade-core` independently testable.
+2. ✅ ✍️ Implement Ropey-backed documents, transactions, selections, undo/redo, and file persistence.
+3. ✅ 🎨 Add the GPUI desktop shell, multi-cursor editing, and live Solarized Glass canvas.
+4. ✅ 🌳 Add Tree-sitter AST parsing/highlighting on background workers (`arcade-language`).
+5. ✅ ⚙️ Ship the first `arcade-headless` commands (`inspect`, `search`, `replace`) with versioned JSON protocol.
+6. ⏳ 🛠️ Add the integrated terminal and a versioned `ir` bundle/documentation pipeline.
+7. ⏳ 🐳 Package, benchmark, harden container behavior, and define huge-file limits.
 
-## 🚧 Status
+## 🚧 Status (v1.0.0 Proof of Concept)
 
-**GUI POC & Headless Scaffolding Active.** The project currently features:
-- 🎨 **Solarized Glass GUI POC** (`arcade-desktop` / `arcade-ui`): A GPU-rendered desktop interface styled with a Solarized Dark minimalist palette, translucent acrylic glass sheen layers, macOS/MAUI-inspired floating command palette (`Ctrl+P`), vibrant syntax highlighting preview, tabs, workspace file explorer, and status bar.
-- ⚙️ **Deterministic Headless Runtime** (`arcade-headless`): A lightweight CLI core free of GPUI or display dependencies, communicating over `arcade-protocol` (v1) for automation, container, and SSH environments.
-- 🧠 **Shared Core Engine** (`arcade-core`): Ropey-backed document buffer with byte offsets, revision tracking, and transaction primitives.
+**Interactive Desktop POC & Versioned Headless CLI Active.** The project currently features:
+- 🎨 **Solarized Glass GUI** (`arcade-desktop` / `arcade-ui`): A GPU-rendered desktop interface styled with a Solarized Dark minimalist palette, translucent acrylic glass sheen layers, macOS/MAUI-inspired floating command palette (`Ctrl+P`), live multi-cursor keyboard editing, vertical cursor glow, and dynamic language/revision status bar.
+- 🌳 **Tree-Sitter Background Syntax Worker** (`arcade-language`): Non-blocking AST-based parsing and query capture execution on a dedicated background worker thread (`tree-sitter = "0.25"` and `tree-sitter-rust = "0.24"`), with markdown scanner and UTF-8 safe line token resolution.
+- ⚙️ **Deterministic Headless CLI** (`arcade-headless`): A lightweight CLI core free of GPUI or display dependencies, communicating over `arcade-protocol` (v1) with `inspect`, `search`, and `replace` subcommands supporting `--json`, `--dry-run`, and `--check` modes.
+- 🧠 **Multi-Cursor Core Engine** (`arcade-core`): Ropey-backed document buffer with byte offsets, revision tracking, atomic transactions, bounded undo/redo history, atomic file persistence, and in-memory rope search.
+- 🗂️ **Workspace Services** (`arcade-workspace`): Recursive file discovery ignoring VCS/build artifacts (`.git`, `target`, `node_modules`).
 
 ## ▶️ Build and run
 
@@ -165,35 +167,51 @@ The built-in terminal will make `ir` immediately available as a companion workfl
 
 ### 🖥️ Run rendered GUI mode
 
-To launch the GPU-rendered desktop application with the Solarized Glass interface:
+Launch the GPU-rendered desktop application with the Solarized Glass interface:
 
 ```sh
+# Using the helper scripts in tools/
+./tools/run.ps1        # Windows PowerShell
+./tools/run.sh         # Linux / macOS Bash
+
+# Or directly via cargo
 cargo run -p arcade-desktop
 ```
 
 #### GUI POC Features:
-- **macOS / MAUI Style Command Palette**: Click the centered search pill in the header or press `Ctrl+P` to toggle the floating glass command palette with keyboard shortcut badges.
+- **Live Multi-Cursor Editing**: Type anywhere on the canvas, navigate with Arrow keys / Home / End, hold `Shift` to extend selections, press `Backspace` / `Enter` / `Tab`, and undo/redo with `Ctrl+Z` / `Ctrl+Y`.
+- **macOS / MAUI Style Command Palette**: Press `Ctrl+P` or click the header search pill to toggle the floating glass command palette with categorized commands ("Open Document...", "Open Folder...", "Save Document", etc.).
+- **Tree-Sitter Highlighting**: Real-time syntax coloring for Rust and Markdown executed asynchronously on a background worker thread.
 - **Glassy Sheen Aesthetic**: Translucent acrylic paneling with specular top-edge sheen highlights, drop shadows, and soft glowing accents.
-- **Vibrant Syntax Highlighting**: Rich tokenization preview showing keywords, types, functions, strings, and operators in high-contrast Solarized accents.
 - **Tabs & Workspace Explorer**: Interactive tab switching (`buffer.rs`, `Welcome.md`, `Cargo.toml`) and hierarchical project tree.
 
 ---
 
-### ⚙️ Run headless mode
+### ⚙️ Run headless CLI mode
 
 Headless mode compiles independently with zero graphics or windowing dependencies:
 
 ```sh
-# Check protocol and binary version
-cargo run -p arcade-headless -- --version
+# Using the helper scripts in tools/
+./tools/run_headless.ps1 --help
+./tools/run_headless.sh --version
 
-# Run the headless command engine
-cargo run -p arcade-headless
+# Inspect file metrics, line counts, encoding, and language
+cargo run -p arcade-headless -- inspect Cargo.toml
+cargo run -p arcade-headless -- inspect Cargo.toml --json
+
+# Search for patterns across files and directories
+cargo run -p arcade-headless -- search "TODO" crates/
+cargo run -p arcade-headless -- search "fn main" crates/ --json
+
+# Atomic search-and-replace with dry-run and CI check modes
+cargo run -p arcade-headless -- replace "old_api" "new_api" src/ --dry-run
+cargo run -p arcade-headless -- replace "deprecated_fn" "new_fn" src/ --check
 ```
 
 ---
 
-###  Containerized headless mode
+### 🐳 Containerized headless mode
 
 Run ArcadeEdit headless inside an isolated, unprivileged container without a display server or GPU:
 
@@ -211,22 +229,19 @@ ENTRYPOINT ["arcade-headless"]
 EOF
 
 # Run commands against a mounted workspace directory
-docker run --rm -v "$(pwd):/workspace" -w /workspace arcade-headless --version
+docker run --rm -v "$(pwd):/workspace" -w /workspace arcade-headless inspect Cargo.toml --json
 ```
 
 ---
 
 ### 🧪 Fast verification & testing
 
-To verify the workspace without re-linking heavy graphics debug binaries:
+To verify the entire workspace with sub-second execution times:
 
 ```sh
 # Fast typecheck across all workspace crates
 cargo check --workspace
 
-# Run core engine tests (sub-second)
-cargo test -p arcade-core
-
-# Run UI component and state tests
-cargo test -p arcade-ui
+# Run all unit tests across the workspace (25 tests in <5s)
+cargo test --workspace --lib
 ```
