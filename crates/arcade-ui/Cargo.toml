@@ -1,0 +1,16 @@
+[package]
+name = "arcade-ui"
+description = "Custom GPUI frontend components for ArcadeEdit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arcade-core = { path = "../arcade-core" }
+gpui.workspace = true
+
+[lints]
+workspace = true

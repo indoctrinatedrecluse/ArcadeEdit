@@ -1,0 +1,40 @@
+[workspace]
+members = [
+    "crates/arcade-core",
+    "crates/arcade-protocol",
+    "crates/arcade-language",
+    "crates/arcade-workspace",
+    "crates/arcade-ui",
+    "crates/arcade-desktop",
+    "crates/arcade-headless",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+authors = ["ArcadeEdit contributors"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/indoctrinatedrecluse/ArcadeEdit"
+
+[workspace.dependencies]
+# GPUI and its platform adapter are developed and released from Zed's shared
+# workspace. Cargo.lock records the exact source revision used by ArcadeEdit.
+gpui = { git = "https://github.com/zed-industries/zed" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", features = ["font-kit", "wayland", "x11"] }
+ropey = "1.6.1"
+serde = { version = "1.0", features = ["derive"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+# Speed up Windows linking by omitting bulky debug symbols for third-party dependencies (GPUI, Windows SDKs, Blade).
+[profile.dev.package."*"]
+opt-level = 2
+debug = 0
+
+[profile.test.package."*"]
+opt-level = 2
+debug = 0

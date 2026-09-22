@@ -1,0 +1,16 @@
+[package]
+name = "arcade-workspace"
+description = "Files, sessions, search, and workspace services for ArcadeEdit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arcade-core = { path = "../arcade-core" }
+
+[lints]
+workspace = true
+

@@ -1,0 +1,23 @@
+[package]
+name = "arcade-headless"
+description = "The display-independent ArcadeEdit CLI and future service host."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arcade-core = { path = "../arcade-core" }
+arcade-protocol = { path = "../arcade-protocol" }
+arcade-workspace = { path = "../arcade-workspace" }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "arcade-headless"
+path = "src/main.rs"
+test = false
+

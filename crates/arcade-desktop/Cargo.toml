@@ -1,0 +1,24 @@
+[package]
+name = "arcade-desktop"
+description = "The GPUI-rendered ArcadeEdit desktop application."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arcade-core = { path = "../arcade-core" }
+arcade-protocol = { path = "../arcade-protocol" }
+arcade-ui = { path = "../arcade-ui" }
+gpui.workspace = true
+gpui_platform.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "arcade-desktop"
+path = "src/main.rs"
+test = false
