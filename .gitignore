@@ -1,5 +1,70 @@
-/target/
-/.idea/
-/.vscode/
-*.rs.bk
+# =============================================================================
+# ArcadeEdit .gitignore
+# =============================================================================
 
+# --- Rust & Cargo Build Artifacts ---
+/target/
+**/*.rs.bk
+*.pdb
+*.ilk
+*.exp
+*.lib
+
+# --- Tooling & Scripts (explicitly preserved) ---
+!tools/
+!tools/**/*.ps1
+!tools/**/*.sh
+
+# --- Operating System Files ---
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Linux
+*~
+.directory
+
+# --- IDEs & Code Editors ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.#*
+*.sublime-project
+*.sublime-workspace
+
+# --- Local Configurations, Overrides & Secrets ---
+*.local.toml
+local_settings.toml
+.env
+.env.*.local
+
+# --- Diagnostic Logs, Profiling & Crash Dumps ---
+*.log
+*.dmp
+*.stackdump
+core
+core.*
+vgcore.*
+perf.data
+perf.data.old
+
+# --- Test Coverage & Benchmarking Outputs ---
+cobertura.xml
+lcov.info
+tarpaulin-report.html
+criterion/
