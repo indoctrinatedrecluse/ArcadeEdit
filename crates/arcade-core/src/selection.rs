@@ -410,3 +410,4 @@ mod tests {
         assert_eq!(line_start.primary().head, ByteOffset(11)); // start of 'second line'
     }
 }
+

@@ -205,3 +205,4 @@ mod tests {
         assert_eq!(redone_sel.primary(), Selection::cursor(ByteOffset(11)));
     }
 }
+
