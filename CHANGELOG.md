@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.0] - 2026-09-23
+
+### ⚡ Interactive ConPTY / POSIX Terminal, Live TUI Screen Grid, and Containerized Modes
+
+ArcadeEdit v1.2.0 brings a major upgrade to the integrated terminal drawer: a full cross-platform Pseudo-Terminal (PTY) engine powered by `portable-pty` and `vte`, supporting complex interactive TUI applications (such as `ir pmon`, `ir nettop`, `ir dua`, `ir fm`), bidirectional real-time key navigation, in-place 2D screen grid rendering, and first-class Linux/Containerized/Headless deployment configurations.
+
+---
+
+### 🖥️ Native Interactive Pseudo-Terminal Engine (`portable-pty`)
+
+- **ConPTY (Windows) and POSIX PTY (Linux/macOS) Support**:
+  - Replaced synchronous pipe execution with native pseudo-terminal allocation via `portable-pty`.
+  - Windows applications (`crossterm`, `ratatui`, `term-sys-monitor`, `cmd.exe`, `powershell.exe`) obtain a real console handle via Windows ConPTY (`CreatePseudoConsole`).
+  - Dedicated asynchronous background reader thread streams incoming stdout/stderr byte chunks without locking the GPUI UI thread.
+  - Automatic detection of interactive TUI commands (`is_tui_command`): `ir pmon`, `ir nettop`, `ir dua`, `ir fm`, `ir edit`, `ir clock`, `ir matrix`, `ir gitv`, `ir sysinfo`, `ir watch`, `ir envv`, `top`, `htop`, `vim`, `nano`, etc.
+  - Automatic ANSI DSR (Device Status Report - `\x1b[6n`) cursor query handling, ensuring instant startup and unblocked execution in Windows ConPTY environments.
+
+---
+
+### 📟 In-Place 2D Virtual Terminal Screen Grid (`vte` + `TerminalScreenGrid`)
+
+- **ANSI / VT100 / xterm Parser & Virtual Grid**:
+  - Real-time $R \times C$ character matrix with cursor tracking, line clearing (`\x1b[K`), screen clearing (`\x1b[2J`), and cursor positioning (`\x1b[{r};{c}H`).
+  - Full SGR color mapping: Solarized 16-color palette (base03, base02, base01, base00, base0, base1, base2, base3, yellow, orange, red, magenta, violet, blue, cyan, green), bold, and dim styles.
+  - Live dashboards (such as `ir pmon` and `ir nettop`) refresh in-place without scrolling runaway history or flickering.
+  - Automatically transfers captured screen lines into scrollable history upon process exit.
+
+---
+
+### ⌨️ Interactive In-Terminal Key Routing & Session Controls
+
+- **Bidirectional Keystroke Dispatching**:
+  - When an interactive session is active, keyboard input routes directly to the child process in real time:
+    - Arrow keys (`↑`/`↓`/`←`/`→`) encoded as standard VT100 escape sequences (`\x1b[A`, `\x1b[B`, `\x1b[C`, `\x1b[D`).
+    - Navigation keys: `Home`, `End`, `PageUp`, `PageDown`, `Tab`, `Backspace`, `Enter`, and `Space`.
+    - Interactive keys: `q`, `c`, `m`, and letter keys passed directly to process stdin.
+  - Pressing `q` or `Ctrl+C` cleanly aborts the active interactive session and returns to the persistent `ir ❯ ` prompt.
+  - Quick action toolbar buttons: `[ir pmon]` (Live Process Monitor) and `[ir nettop]` (Live Network Monitor) alongside `[ir help]`, `[ir list]`, `[Clear]`, and `[✕]`.
+
+---
+
+### 🐳 Linux, Headless, and Containerized Mode Support
+
+- **Multi-Stage Dockerfile & Docker Compose**:
+  - Official multi-stage `Dockerfile`:
+    - Stage 1 (`builder`): Compiles `arcade-headless` from source using `rust:1.80-slim-bookworm`.
+    - Stage 2 (`runtime`): Minimal `debian:bookworm-slim` image bundling `arcade-headless` and the standalone `ir` companion CLI (v3.8).
+  - `docker-compose.yml` for containerized codebase inspection, regex search/replace, and interactive shell sessions.
+- **Display-Independent Headless Engine (`arcade-headless`)**:
+  - Runs natively on Linux, Docker containers, and CI/CD pipelines with zero X11/Wayland/GPU dependencies.
+  - Automated inspection (`inspect`), fast in-memory rope search (`search`), and atomic multi-file search-and-replace (`replace`) with `--dry-run`, `--check` CI validation, and structured `--json` output.
+
+---
+
 ## [1.1.0] - 2026-09-23
 
 ### 🚀 Integrated Terminal, Bundled `ir` & `term-sys-monitor`, and In-App Help Release

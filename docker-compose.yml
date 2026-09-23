@@ -1,0 +1,33 @@
+# ==============================================================================
+# ArcadeEdit Docker Compose Configuration
+# Provides containerized headless editing, codebase search/replace, and CI verification.
+#
+# Usage:
+#   docker compose run --rm arcade inspect Cargo.toml
+#   docker compose run --rm arcade search "ArcadeEdit"
+#   docker compose run --rm arcade replace "old" "new" --dry-run
+#   docker compose run --rm term ir pmon
+# ==============================================================================
+
+version: '3.8'
+
+services:
+  arcade:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+
+  term:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: ["/bin/bash"]
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+

@@ -213,25 +213,23 @@ cargo run -p arcade-headless -- replace "deprecated_fn" "new_fn" src/ --check
 
 ---
 
-### 🐳 Containerized headless mode
+### 🐳 Containerized headless & Linux mode
 
-Run ArcadeEdit headless inside an isolated, unprivileged container without a display server or GPU:
+Run ArcadeEdit headless and companion utilities inside an isolated container without a display server or GPU:
 
 ```sh
-# Build the headless container image
-docker build -t arcade-headless -f - . <<EOF
-FROM rust:1.82-slim AS builder
-WORKDIR /app
-COPY . .
-RUN cargo build --release -p arcade-headless
+# Build the official multi-stage container image
+docker build -t arcade-edit .
 
-FROM debian:bookworm-slim
-COPY --from=builder /app/target/release/arcade-headless /usr/local/bin/arcade-headless
-ENTRYPOINT ["arcade-headless"]
-EOF
+# Inspect files and output structured JSON
+docker run --rm -v "$(pwd):/workspace" arcade-edit inspect Cargo.toml --json
 
-# Run commands against a mounted workspace directory
-docker run --rm -v "$(pwd):/workspace" -w /workspace arcade-headless inspect Cargo.toml --json
+# Run codebase search and replacements via Docker Compose
+docker compose run --rm arcade search "ArcadeEdit"
+docker compose run --rm arcade replace "old_api" "new_api" --dry-run
+
+# Run interactive companion shell in container
+docker compose run --rm term ir pmon
 ```
 
 ---
@@ -244,6 +242,7 @@ To verify the entire workspace with sub-second execution times:
 # Fast typecheck across all workspace crates
 cargo check --workspace
 
-# Run all unit tests across the workspace (25 tests in <5s)
+# Run all unit tests across the workspace (54 tests)
 cargo test --workspace --lib
 ```
+

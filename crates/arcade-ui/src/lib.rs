@@ -851,6 +851,11 @@ impl Render for ArcadeShell {
             }
         }
 
+        // Poll any active interactive pseudo-terminal session (e.g. ir pmon, ir nettop)
+        if self.show_terminal && self.terminal.poll_active_session() {
+            cx.notify();
+        }
+
         // Ensure window keyboard focus is directed to this shell component
         if let Some(fh) = &self.focus_handle {
             if !fh.is_focused(window) {
