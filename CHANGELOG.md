@@ -17,12 +17,13 @@ ArcadeEdit v1.1.0 introduces an integrated terminal surface, native companion ut
 
 ### 📟 Integrated Terminal & Bundled Companion Utilities (`arcade-ui::terminal`)
 
-- **Interactive Bottom Terminal Panel**:
-  - Docked 250px console surface at the bottom of the workspace styled with Solarized Glass and specular top-edge sheen reflection.
+- **Interactive Persistent Bottom Terminal Panel**:
+  - Docked 260px console surface at the window root level (directly above the status bar), spanning the full window width, styled with Solarized Glass and specular top-edge sheen reflection.
+  - Decoupled from file tabs and editor surfaces—remains persistent across all tab switches, file openings, or new tab creations.
   - Active interactive prompt (`ir ❯ `) with command history recall (`↑`/`↓`), line abort (`Ctrl+C`), and buffer clear (`Ctrl+L`).
+  - Clean session exit: typing `exit` or `quit` prints `[Terminal session closed]` and automatically closes the terminal drawer.
   - Quick action toolbar buttons: `[ir help]`, `[ir list]`, `[Clear]`, and `[✕]` (close panel).
-  - Dedicated tab header `📟 Terminal (ir)` with click-to-focus and close actions.
-  - Keyboard toggle via `Ctrl+\`` or Command Palette.
+  - Quick toggle button right in the Status Bar (`📟 Terminal`) as well as keyboard shortcut `Ctrl+\`` and Command Palette.
 - **Native Self-Resolution of Bundled `ir` & `term-sys-monitor`**:
   - Automatically resolves `ir` commands (`ir ...`) directly to the bundled executable (`bin/ir.exe`, application sibling, `C:\ir\ir.exe`, or standard locations) without requiring users to configure system `PATH`.
   - Dispatches standard shell commands directly within the active workspace working directory, capturing stdout, stderr, and exit codes.
@@ -70,6 +71,10 @@ ArcadeEdit v1.1.0 introduces an integrated terminal surface, native companion ut
   - Automatically expands ancestor directories when files are opened.
   - Dedicated smooth scrolling container (`.id("sidebar-tree-scroll").overflow_y_scroll()`) for effortless navigation of large source trees.
   - Preserved filetype badges (`🦀`, `📄`, `⚙️`, `🔒`, `📝`) with click-to-open handlers opening files into dedicated editor tabs.
+- **Binary & Executable File Safety**:
+  - Automatically identifies executable and binary files (`.exe`, `.dll`, `.so`, `.bin`, `.zip`, `.wasm`, `.tar`, `.gz`, images, etc.).
+  - Visually marks binary files with warning red text (`theme.warning_red: #dc322f`), a `⚠️` warning icon, and a `[bin]` badge.
+  - Safety click guard: clicking a binary file refuses to load raw binary data into the editor (protecting against freezes/crashes) and instead logs a clear error notification to the integrated terminal.
 
 ---
 

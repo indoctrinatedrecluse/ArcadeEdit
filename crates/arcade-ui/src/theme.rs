@@ -53,6 +53,9 @@ pub struct SolarizedTheme {
     /// Vibrant syntax: Violet (attributes, macros, annotations).
     pub syntax_violet: Rgba,
 
+    /// Warning accent: Red (errors, binary files, danger alerts).
+    pub warning_red: Rgba,
+
     /// Glass badge background.
     pub badge_bg: Rgba,
     /// Glass badge border.
@@ -99,6 +102,7 @@ impl SolarizedTheme {
             syntax_orange: rgb(0xcb4b16),
             syntax_magenta: rgb(0xd33682),
             syntax_violet: rgb(0x6c71c4),
+            warning_red: rgb(0xdc322f),
 
             // Badges
             badge_bg: rgba(0x002b3699),
@@ -134,7 +138,9 @@ impl SolarizedTheme {
             syntax_orange: rgb(0xcb4b16),
             syntax_magenta: rgb(0xd33682),
             syntax_violet: rgb(0x6c71c4),
+            warning_red: rgb(0xdc322f),
 
+            // Badges
             badge_bg: rgba(0xeee8d599),
             badge_border: rgba(0x586e7533),
         }

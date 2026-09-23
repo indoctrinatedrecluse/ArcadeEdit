@@ -283,13 +283,18 @@ impl ArcadeShell {
 
     /// Opens a file from disk into an editor tab, detecting language and updating highlights.
     pub fn open_file(&mut self, path: PathBuf) -> Result<(), String> {
-        // 1. If already open in an existing tab, activate it
+        // 1. Guard against opening binary / executable files
+        if tree_view::is_binary_path(&path) {
+            return Err(format!("Cannot open binary or executable file: {}", path.display()));
+        }
+
+        // 2. If already open in an existing tab, activate it
         if let Some(existing_idx) = self.tabs.iter().position(|t| t.file_path.as_ref() == Some(&path)) {
             self.select_tab(existing_idx);
             return Ok(());
         }
 
-        // 2. Read file from disk
+        // 3. Read file from disk
         let content = std::fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read file {}: {e}", path.display()))?;
 
@@ -506,6 +511,7 @@ impl ArcadeShell {
             }
             "Open Integrated Terminal with `ir`" => {
                 self.show_terminal = true;
+                self.terminal.is_open = true;
                 self.terminal_focused = true;
             }
             "Toggle Solarized Sheen Contrast" => {
@@ -1040,7 +1046,11 @@ impl Render for ArcadeShell {
                 if ctrl && (key == "`" || key == "~") {
                     this.show_terminal = !this.show_terminal;
                     if this.show_terminal {
+                        this.terminal.is_open = true;
                         this.terminal_focused = true;
+                    } else {
+                        this.terminal.is_open = false;
+                        this.terminal_focused = false;
                     }
                     cx.notify();
                     return;
@@ -1055,8 +1065,17 @@ impl Render for ArcadeShell {
                     }
                     let typed_char = resolve_input_character(event);
                     if this.terminal.handle_key(key, ctrl, typed_char.as_deref()) {
+                        if !this.terminal.is_open {
+                            this.show_terminal = false;
+                            this.terminal_focused = false;
+                        }
                         cx.notify();
                         return;
+                    }
+                    if !this.terminal.is_open {
+                        this.show_terminal = false;
+                        this.terminal_focused = false;
+                        cx.notify();
                     }
                     return;
                 }
@@ -1563,6 +1582,7 @@ impl Render for ArcadeShell {
                                                 let is_active = !item.is_dir && current_opt.as_ref().map_or(false, |p| p == &item.path);
                                                 let path_clone = item.path.clone();
                                                 let is_dir = item.is_dir;
+                                                let is_bin = item.is_binary();
                                                 let icon = item.icon();
                                                 let toggle_arrow = if item.is_dir {
                                                     if item.is_expanded { "▾ " } else { "▸ " }
@@ -1592,6 +1612,8 @@ impl Render for ArcadeShell {
                                                     })
                                                     .text_color(if is_active {
                                                         theme.syntax_cyan
+                                                    } else if is_bin {
+                                                        theme.warning_red
                                                     } else if is_dir {
                                                         theme.syntax_yellow
                                                     } else {
@@ -1602,6 +1624,14 @@ impl Render for ArcadeShell {
                                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
                                                         if is_dir {
                                                             this.toggle_folder_expansion(path_clone.clone());
+                                                        } else if is_bin {
+                                                            this.show_terminal = true;
+                                                            this.terminal.is_open = true;
+                                                            this.terminal_focused = true;
+                                                            this.terminal.lines.push(TerminalLine::new(
+                                                                TerminalLineKind::Error,
+                                                                format!("Blocked opening binary executable: {}", path_clone.display()),
+                                                            ));
                                                         } else {
                                                             let _ = this.open_file(path_clone.clone());
                                                         }
@@ -1627,7 +1657,11 @@ impl Render for ArcadeShell {
                                                                 gpui::FontWeight::NORMAL
                                                             })
                                                             .overflow_hidden()
-                                                            .child(item.name),
+                                                            .child(if is_bin {
+                                                                format!("{} [bin]", item.name)
+                                                            } else {
+                                                                item.name
+                                                            }),
                                                     )
                                             }).collect();
 
@@ -1772,7 +1806,7 @@ impl Render for ArcadeShell {
                                 ),
                         )
                     })
-                    // Main Editor + Integrated Terminal Area
+                    // Main Editor Surface
                     .child(
                         div()
                             .flex()
@@ -1781,44 +1815,42 @@ impl Render for ArcadeShell {
                             .min_h_0()
                             .min_w_0()
                             .relative()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_h_0()
-                                    .flex()
-                                    .relative()
-                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                        this.terminal_focused = false;
-                                        cx.notify();
-                                    }))
-                                    .child(render_live_editor_surface(
-                                        &theme,
-                                        &self.document,
-                                        &self.selections,
-                                        &active_filename,
-                                        &self.highlight_spans,
-                                        &self.find_replace.matches,
-                                        self.find_replace.current_match(),
-                                        &self.editor_scroll_handle,
-                                    ))
-                                    .when(self.find_replace.is_open, |p| {
-                                        p.child(render_find_replace_bar(&theme, &self.find_replace, cx))
-                                    }),
-                            )
-                            .when(show_terminal, |p| {
-                                p.child(
-                                    div()
-                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                            this.terminal_focused = true;
-                                            cx.notify();
-                                        }))
-                                        .child(render_terminal_panel(&theme, &self.terminal, cx)),
-                                )
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                this.terminal_focused = false;
+                                cx.notify();
+                            }))
+                            .child(render_live_editor_surface(
+                                &theme,
+                                &self.document,
+                                &self.selections,
+                                &active_filename,
+                                &self.highlight_spans,
+                                &self.find_replace.matches,
+                                self.find_replace.current_match(),
+                                &self.editor_scroll_handle,
+                            ))
+                            .when(self.find_replace.is_open, |p| {
+                                p.child(render_find_replace_bar(&theme, &self.find_replace, cx))
                             }),
-                    )
+                    ),
             )
             // =================================================================
-            // 4. STATUS BAR (Minimalist Glassy Bottom Strip)
+            // 4. PERSISTENT DOCKED TERMINAL PANE (Root Window Level)
+            // =================================================================
+            .when(show_terminal, |p| {
+                p.child(
+                    div()
+                        .w_full()
+                        .flex_shrink_0()
+                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                            this.terminal_focused = true;
+                            cx.notify();
+                        }))
+                        .child(render_terminal_panel(&theme, &self.terminal, cx)),
+                )
+            })
+            // =================================================================
+            // 5. STATUS BAR (Minimalist Glassy Bottom Strip)
             // =================================================================
             .child(
                 div()
@@ -1868,7 +1900,46 @@ impl Render for ArcadeShell {
                                 div()
                                     .text_color(theme.text_muted)
                                     .child(format!("UTF-8  •  LF  •  {}", lang_label))
-                            }),
+                            })
+                            .child(
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_md()
+                                    .bg(if show_terminal {
+                                        theme.bg_active_glass
+                                    } else {
+                                        gpui::rgba(0x00000000)
+                                    })
+                                    .border_1()
+                                    .border_color(if show_terminal {
+                                        theme.border_glass
+                                    } else {
+                                        gpui::rgba(0x00000000)
+                                    })
+                                    .text_color(if show_terminal {
+                                        theme.syntax_cyan
+                                    } else {
+                                        theme.text_muted
+                                    })
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.bg_hover_glass).text_color(theme.text_bright))
+                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                        this.show_terminal = !this.show_terminal;
+                                        if this.show_terminal {
+                                            this.terminal.is_open = true;
+                                            this.terminal_focused = true;
+                                        } else {
+                                            this.terminal.is_open = false;
+                                            this.terminal_focused = false;
+                                        }
+                                        cx.notify();
+                                    }))
+                                    .child("📟 Terminal"),
+                            ),
                     )
                     // Right Position & Revision Badges
                     .child(
@@ -2135,9 +2206,51 @@ mod tests {
         terminal.execute_command("echo arcade_term_test");
         assert!(terminal.lines.iter().any(|l| l.text.contains("arcade_term_test")));
 
+        // Exit / quit command cleanly closes session
+        terminal.is_open = true;
+        assert!(terminal.is_open);
+        terminal.execute_command("exit");
+        assert!(!terminal.is_open);
+        assert!(terminal.lines.iter().any(|l| l.text.contains("[Terminal session closed]")));
+
+        terminal.is_open = true;
+        terminal.execute_command("quit");
+        assert!(!terminal.is_open);
+
         // Clear command
         terminal.execute_command("clear");
         assert!(terminal.lines.is_empty());
+    }
+
+    #[test]
+    fn refuses_to_open_binary_files() {
+        let mut shell = ArcadeShell::test_stub();
+        let exe_result = shell.open_file(PathBuf::from("arcade.exe"));
+        assert!(exe_result.is_err());
+        assert!(exe_result.unwrap_err().contains("Cannot open binary or executable file"));
+
+        let dll_result = shell.open_file(PathBuf::from("library.dll"));
+        assert!(dll_result.is_err());
+    }
+
+    #[test]
+    fn terminal_persists_across_tab_switches() {
+        let mut shell = ArcadeShell::test_stub();
+        shell.show_terminal = true;
+        shell.terminal.is_open = true;
+
+        // Switch tabs back and forth
+        shell.select_tab(1);
+        assert!(shell.show_terminal, "Terminal must remain open when switching tabs");
+        assert!(shell.terminal.is_open);
+
+        shell.select_tab(0);
+        assert!(shell.show_terminal, "Terminal must remain open when switching back");
+        assert!(shell.terminal.is_open);
+
+        shell.new_tab();
+        assert!(shell.show_terminal, "Terminal must remain open when creating a new tab");
+        assert!(shell.terminal.is_open);
     }
 
     #[test]

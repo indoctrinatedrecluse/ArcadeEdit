@@ -230,7 +230,11 @@ impl TerminalState {
             self.lines.clear();
             return;
         }
-        if cmd == "exit" {
+        if cmd == "exit" || cmd == "quit" {
+            self.lines.push(TerminalLine::new(
+                TerminalLineKind::Info,
+                "[Terminal session closed]",
+            ));
             self.is_open = false;
             return;
         }
@@ -570,6 +574,8 @@ pub fn render_terminal_panel(
                                 .hover(|s| s.text_color(theme.syntax_magenta).bg(theme.bg_hover_glass))
                                 .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                                     this.show_terminal = false;
+                                    this.terminal.is_open = false;
+                                    this.terminal_focused = false;
                                     cx.notify();
                                 }))
                                 .child("✕"),

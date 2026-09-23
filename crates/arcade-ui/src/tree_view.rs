@@ -21,7 +21,29 @@ pub struct VisibleTreeItem {
     pub is_expanded: bool,
 }
 
+/// Recognized binary and executable file extensions that cannot or should not be opened as text documents.
+pub const BINARY_EXTENSIONS: &[&str] = &[
+    "exe", "dll", "so", "dylib", "bin", "obj", "o", "a", "lib", "pdb", "iso", "tar", "gz", "zip",
+    "7z", "rar", "wasm", "class", "pyc", "node", "pak", "png", "jpg", "jpeg", "gif", "ico",
+    "webp", "bmp", "tiff", "mp3", "mp4", "wav", "ogg", "flac", "avi", "mkv", "mov", "webm",
+    "woff", "woff2", "ttf", "eot", "otf",
+];
+
+/// Returns `true` if the path has a known binary or executable extension.
+pub fn is_binary_path(path: &Path) -> bool {
+    let ext = match path.extension().and_then(|e| e.to_str()) {
+        Some(e) => e.to_ascii_lowercase(),
+        None => return false,
+    };
+    BINARY_EXTENSIONS.contains(&ext.as_str())
+}
+
 impl VisibleTreeItem {
+    /// Returns `true` if this item represents a binary or executable file.
+    pub fn is_binary(&self) -> bool {
+        !self.is_dir && is_binary_path(&self.path)
+    }
+
     /// Returns the appropriate visual icon based on filetype or directory state.
     pub fn icon(&self) -> &'static str {
         if self.is_dir {
@@ -30,6 +52,8 @@ impl VisibleTreeItem {
             } else {
                 "📁"
             }
+        } else if self.is_binary() {
+            "⚠️"
         } else {
             match self.path.extension().and_then(|e| e.to_str()).unwrap_or("") {
                 "rs" => "🦀",
@@ -170,5 +194,36 @@ mod tests {
             assert_eq!(lib_item.depth, 1);
             assert_eq!(lib_item.icon(), "🦀");
         }
+    }
+
+    #[test]
+    fn detects_binary_files() {
+        assert!(is_binary_path(Path::new("ir.exe")));
+        assert!(is_binary_path(Path::new("libarcade.dll")));
+        assert!(is_binary_path(Path::new("archive.zip")));
+        assert!(is_binary_path(Path::new("binary.wasm")));
+        assert!(!is_binary_path(Path::new("main.rs")));
+        assert!(!is_binary_path(Path::new("Cargo.toml")));
+        assert!(!is_binary_path(Path::new("README.md")));
+
+        let exe_item = VisibleTreeItem {
+            path: PathBuf::from("bin/ir.exe"),
+            name: "ir.exe".to_string(),
+            is_dir: false,
+            depth: 1,
+            is_expanded: false,
+        };
+        assert!(exe_item.is_binary());
+        assert_eq!(exe_item.icon(), "⚠️");
+
+        let rs_item = VisibleTreeItem {
+            path: PathBuf::from("src/main.rs"),
+            name: "main.rs".to_string(),
+            is_dir: false,
+            depth: 1,
+            is_expanded: false,
+        };
+        assert!(!rs_item.is_binary());
+        assert_eq!(rs_item.icon(), "🦀");
     }
 }
