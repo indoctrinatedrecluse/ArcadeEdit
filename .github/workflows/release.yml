@@ -43,8 +43,7 @@ jobs:
           Copy-Item target/${{ matrix.target }}/release/arcade-headless.exe .
           Invoke-WebRequest -Uri "https://github.com/indoctrinatedrecluse/ir-cli-utility/releases/download/v3.8/ir-windows.zip" -OutFile "ir-windows.zip"
           Expand-Archive -Path "ir-windows.zip" -DestinationPath "ir_dist" -Force
-          Copy-Item "ir_dist/bin/ir.exe" .
-          Copy-Item "ir_dist/bin/term-sys-monitor-windows.exe" .
+          Get-ChildItem -Path "ir_dist" -Filter "*.exe" -Recurse | Copy-Item -Destination .
           Compress-Archive -Path arcade-desktop.exe, arcade-headless.exe, ir.exe, term-sys-monitor-windows.exe, README.md, CHANGELOG.md -DestinationPath ${{ matrix.artifact_name }}
 
       - name: Build Linux binary (Headless CLI)
@@ -54,8 +53,8 @@ jobs:
           cp target/${{ matrix.target }}/release/arcade-headless .
           curl -sL "https://github.com/indoctrinatedrecluse/ir-cli-utility/releases/download/v3.8/ir-linux.tar.gz" -o "ir-linux.tar.gz"
           mkdir -p ir_dist && tar -xzf ir-linux.tar.gz -C ir_dist
-          cp ir_dist/ir . || true
-          cp ir_dist/term-sys-monitor-linux . || true
+          find ir_dist -type f -name "ir" -exec cp {} . \;
+          find ir_dist -type f -name "term-sys-monitor-linux" -exec cp {} . \;
           tar -czf ${{ matrix.artifact_name }} arcade-headless ir term-sys-monitor-linux README.md CHANGELOG.md
 
       - name: Upload artifact
