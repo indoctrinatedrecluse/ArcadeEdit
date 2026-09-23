@@ -98,6 +98,9 @@ fn run_inspect(path_str: &str, json_mode: bool) -> Result<ExitCode, String> {
     let language = match LanguageId::from_path(&path) {
         LanguageId::Rust => "Rust",
         LanguageId::Markdown => "Markdown",
+        LanguageId::Toml => "TOML",
+        LanguageId::Yaml => "YAML",
+        LanguageId::Json => "JSON",
         LanguageId::PlainText => "Plain Text",
     };
 

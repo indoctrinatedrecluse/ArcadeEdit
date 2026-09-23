@@ -279,3 +279,4 @@ mod tests {
         assert!(spans.iter().any(|s| s.kind == HighlightKind::Keyword));
     }
 }
+
