@@ -25,8 +25,61 @@ use theme::SolarizedTheme;
 /// Identifies the custom visual system used by the desktop application.
 pub const DESIGN_SYSTEM_NAME: &str = "ArcadeEdit Solarized Glass";
 
+/// An open document tab inside ArcadeEdit.
+#[derive(Clone, Debug)]
+pub struct EditorTab {
+    /// Unique identifier for this tab instance.
+    pub id: usize,
+    /// Display title shown on the tab header (e.g., "main.rs", "Welcome.md").
+    pub title: String,
+    /// Active document buffer representation.
+    pub document: Document,
+    /// Multi-cursor selections across this document.
+    pub selections: SelectionSet,
+    /// Undo/redo history manager.
+    pub history: History,
+    /// Detected language grammar for syntax highlighting.
+    pub language: LanguageId,
+    /// Pre-computed syntax highlight spans.
+    pub highlight_spans: Vec<HighlightSpan>,
+    /// Associated disk file path (if loaded from or saved to disk).
+    pub file_path: Option<PathBuf>,
+}
+
+impl EditorTab {
+    /// Constructs a new editor tab.
+    pub fn new(
+        id: usize,
+        title: impl Into<String>,
+        document: Document,
+        language: LanguageId,
+        file_path: Option<PathBuf>,
+        highlight_spans: Vec<HighlightSpan>,
+    ) -> Self {
+        Self {
+            id,
+            title: title.into(),
+            document,
+            selections: SelectionSet::cursor(ByteOffset(0)),
+            history: History::new(),
+            language,
+            highlight_spans,
+            file_path,
+        }
+    }
+}
+
 /// The rich custom-rendered ArcadeEdit desktop application shell.
 pub struct ArcadeShell {
+    /// Dynamic open editor tabs.
+    pub tabs: Vec<EditorTab>,
+    /// Index of the active tab.
+    pub active_tab_index: usize,
+    /// Counter for unique tab identifiers.
+    pub next_tab_id: usize,
+    /// Synchronous language service for instant frame-0 syntax highlighting.
+    pub language_service: Option<LanguageService>,
+
     /// Active document buffer representation.
     pub document: Document,
     /// Multi-cursor selections across the active document.
@@ -80,16 +133,30 @@ impl ArcadeShell {
 
         let focus_handle = cx.focus_handle();
 
+        let mut service_opt = LanguageService::new().ok();
         let mut spans = Vec::new();
-        if let Ok(mut service) = LanguageService::new() {
+        if let Some(service) = &mut service_opt {
             spans = service.highlight(LanguageId::Markdown, initial_text);
         }
+
+        let initial_tab = EditorTab::new(
+            1,
+            "Welcome.md",
+            Document::new(initial_text),
+            LanguageId::Markdown,
+            None,
+            spans.clone(),
+        );
 
         let worker = HighlightWorker::spawn().ok();
         let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let terminal = TerminalState::new(working_dir);
 
         Self {
+            tabs: vec![initial_tab],
+            active_tab_index: 0,
+            next_tab_id: 2,
+            language_service: service_opt,
             document: Document::new(initial_text),
             selections: SelectionSet::cursor(ByteOffset(0)),
             history: History::new(),
@@ -117,8 +184,22 @@ impl ArcadeShell {
 
     /// Creates a shell without a window focus handle (suitable for unit tests).
     pub fn test_stub() -> Self {
+        let initial_text = "# ArcadeEdit Test Document\n";
+        let initial_tab = EditorTab::new(
+            1,
+            "Welcome.md",
+            Document::new(initial_text),
+            LanguageId::Rust,
+            None,
+            Vec::new(),
+        );
+
         Self {
-            document: Document::new("# ArcadeEdit Test Document\n"),
+            tabs: vec![initial_tab],
+            active_tab_index: 0,
+            next_tab_id: 2,
+            language_service: LanguageService::new().ok(),
+            document: Document::new(initial_text),
             selections: SelectionSet::cursor(ByteOffset(0)),
             history: History::new(),
             focus_handle: None,
@@ -180,20 +261,65 @@ impl ArcadeShell {
             let _ = std::fs::write(path, self.document.to_string());
         }
         self.history.mark_saved(self.document.revision());
+        self.sync_to_active_tab();
     }
 
-    /// Opens a file from disk into the active editor buffer, detecting language and updating highlights.
+    /// Opens a file from disk into an editor tab, detecting language and updating highlights.
     pub fn open_file(&mut self, path: PathBuf) -> Result<(), String> {
+        // 1. If already open in an existing tab, activate it
+        if let Some(existing_idx) = self.tabs.iter().position(|t| t.file_path.as_ref() == Some(&path)) {
+            self.select_tab(existing_idx);
+            return Ok(());
+        }
+
+        // 2. Read file from disk
         let content = std::fs::read_to_string(&path)
             .map_err(|e| format!("Failed to read file {}: {e}", path.display()))?;
 
-        self.language = LanguageId::from_path(&path);
-        self.document = Document::new(&content);
-        self.selections = SelectionSet::cursor(ByteOffset(0));
-        self.history = History::new();
-        self.history.mark_saved(self.document.revision());
-        self.current_file_path = Some(path);
-        self.active_tab = 0;
+        let language = LanguageId::from_path(&path);
+        let file_title = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("file")
+            .to_string();
+
+        // 3. Immediately compute syntax highlight spans synchronously (<2ms)
+        let spans = if let Some(service) = &mut self.language_service {
+            service.highlight(language, &content)
+        } else if let Ok(mut service) = LanguageService::new() {
+            let s = service.highlight(language, &content);
+            self.language_service = Some(service);
+            s
+        } else {
+            Vec::new()
+        };
+
+        let doc = Document::new(&content);
+        let mut hist = History::new();
+        hist.mark_saved(doc.revision());
+
+        let id = self.next_tab_id;
+        self.next_tab_id += 1;
+
+        let mut new_tab = EditorTab::new(id, file_title, doc, language, Some(path.clone()), spans);
+        new_tab.history = hist;
+
+        // If the only tab is an unmodified default Welcome or empty untitled buffer, replace it
+        let should_replace_first = self.tabs.len() == 1
+            && self.tabs[0].file_path.is_none()
+            && !self.tabs[0].history.is_dirty(self.tabs[0].document.revision())
+            && (self.tabs[0].title == "Welcome.md" || self.tabs[0].title.starts_with("untitled"));
+
+        if should_replace_first {
+            self.tabs[0] = new_tab;
+            self.active_tab_index = 0;
+        } else {
+            self.sync_to_active_tab();
+            self.tabs.push(new_tab);
+            self.active_tab_index = self.tabs.len() - 1;
+        }
+
+        self.sync_from_active_tab();
         self.trigger_highlight();
         Ok(())
     }
@@ -383,15 +509,92 @@ impl ArcadeShell {
         }
     }
 
-    /// Selects the active tab by its index and updates the target language grammar.
+    /// Syncs the shell's active-document mirror fields with the currently active tab in `self.tabs`.
+    pub fn sync_from_active_tab(&mut self) {
+        if let Some(tab) = self.tabs.get(self.active_tab_index) {
+            self.document = tab.document.clone();
+            self.selections = tab.selections.clone();
+            self.history = tab.history.clone();
+            self.language = tab.language;
+            self.highlight_spans = tab.highlight_spans.clone();
+            self.current_file_path = tab.file_path.clone();
+            self.active_tab = self.active_tab_index;
+        }
+    }
+
+    /// Syncs mutations from shell's active-document fields back into the active tab in `self.tabs`.
+    pub fn sync_to_active_tab(&mut self) {
+        if let Some(tab) = self.tabs.get_mut(self.active_tab_index) {
+            tab.document = self.document.clone();
+            tab.selections = self.selections.clone();
+            tab.history = self.history.clone();
+            tab.language = self.language;
+            tab.highlight_spans = self.highlight_spans.clone();
+            tab.file_path = self.current_file_path.clone();
+            if let Some(path) = &self.current_file_path {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    tab.title = name.to_string();
+                }
+            }
+        }
+    }
+
+    /// Selects the active tab by its index and synchronizes buffers.
     pub fn select_tab(&mut self, tab: usize) {
-        self.active_tab = tab;
-        self.language = match tab {
-            0 => LanguageId::Rust,
-            1 => LanguageId::Markdown,
-            _ => LanguageId::PlainText,
-        };
+        if tab >= self.tabs.len() {
+            return;
+        }
+        self.sync_to_active_tab();
+        self.active_tab_index = tab;
+        self.sync_from_active_tab();
+
+        // If highlight spans for this tab are empty, generate them immediately!
+        if self.highlight_spans.is_empty() {
+            if let Some(service) = &mut self.language_service {
+                self.highlight_spans = service.highlight(self.language, &self.document.to_string());
+                if let Some(t) = self.tabs.get_mut(self.active_tab_index) {
+                    t.highlight_spans = self.highlight_spans.clone();
+                }
+            }
+        }
         self.trigger_highlight();
+    }
+
+    /// Closes the tab at `index`.
+    pub fn close_tab(&mut self, index: usize) {
+        if index >= self.tabs.len() {
+            return;
+        }
+        if self.tabs.len() == 1 {
+            let id = self.next_tab_id;
+            self.next_tab_id += 1;
+            let initial = Document::new("");
+            self.tabs[0] = EditorTab::new(id, "untitled.rs", initial, LanguageId::Rust, None, Vec::new());
+            self.active_tab_index = 0;
+            self.sync_from_active_tab();
+            return;
+        }
+
+        self.tabs.remove(index);
+        if self.active_tab_index >= self.tabs.len() {
+            self.active_tab_index = self.tabs.len() - 1;
+        } else if self.active_tab_index > index {
+            self.active_tab_index -= 1;
+        }
+        self.sync_from_active_tab();
+    }
+
+    /// Opens a new empty untitled document tab.
+    pub fn new_tab(&mut self) {
+        self.sync_to_active_tab();
+        let id = self.next_tab_id;
+        self.next_tab_id += 1;
+        let tab_num = self.tabs.len() + 1;
+        let title = format!("untitled-{}.rs", tab_num);
+        let tab = EditorTab::new(id, title, Document::new(""), LanguageId::Rust, None, Vec::new());
+        self.tabs.push(tab);
+        self.active_tab_index = self.tabs.len() - 1;
+        self.sync_from_active_tab();
     }
 
     /// Dispatches a background syntax highlighting request for the current document state.
@@ -410,6 +613,7 @@ impl ArcadeShell {
         if let Ok((tx, new_sels)) = self.document.insert_text_at_selections(&self.selections, text) {
             self.history.push(tx);
             self.selections = new_sels;
+            self.sync_to_active_tab();
             self.trigger_highlight();
         }
     }
@@ -419,6 +623,7 @@ impl ArcadeShell {
         if let Ok((tx, new_sels)) = self.document.delete_backward_at_selections(&self.selections) {
             self.history.push(tx);
             self.selections = new_sels;
+            self.sync_to_active_tab();
             self.trigger_highlight();
         }
     }
@@ -427,6 +632,7 @@ impl ArcadeShell {
     pub fn undo(&mut self) {
         if let Ok(Some(sels)) = self.history.undo(&mut self.document) {
             self.selections = sels;
+            self.sync_to_active_tab();
             self.trigger_highlight();
         }
     }
@@ -435,6 +641,7 @@ impl ArcadeShell {
     pub fn redo(&mut self) {
         if let Ok(Some(sels)) = self.history.redo(&mut self.document) {
             self.selections = sels;
+            self.sync_to_active_tab();
             self.trigger_highlight();
         }
     }
@@ -504,7 +711,10 @@ impl Render for ArcadeShell {
         if let Some(worker) = &self.highlight_worker {
             while let Some(res) = worker.try_recv_response() {
                 if res.revision == self.document.revision() {
-                    self.highlight_spans = res.spans;
+                    self.highlight_spans = res.spans.clone();
+                    if let Some(tab) = self.tabs.get_mut(self.active_tab_index) {
+                        tab.highlight_spans = res.spans;
+                    }
                 }
             }
         }
@@ -525,7 +735,7 @@ impl Render for ArcadeShell {
         let active_help_section = self.active_help_section;
         let query = &self.command_query;
         let commands = &self.commands;
-        let active_tab = self.active_tab;
+        let active_tab = self.active_tab_index;
 
         // Current primary cursor coordinates for the status bar
         let primary_head = self.selections.primary().head;
@@ -541,33 +751,12 @@ impl Render for ArcadeShell {
             "Revision (Clean)"
         };
 
-        let current_file_name = self
-            .current_file_path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "buffer.rs".to_string());
-
-        let active_tab_title = if active_tab == 0 {
-            current_file_name
-        } else if active_tab == 1 {
-            "Welcome.md".to_string()
+        let active_tab_title = if let Some(tab) = self.tabs.get(self.active_tab_index) {
+            tab.title.clone()
         } else {
-            "Cargo.toml".to_string()
+            "buffer.rs".to_string()
         };
         let active_filename = active_tab_title.clone();
-
-        let active_tab_icon = if active_tab == 0 {
-            match self.language {
-                LanguageId::Rust => "🦀",
-                LanguageId::Markdown => "📄",
-                LanguageId::PlainText => "📝",
-            }
-        } else if active_tab == 1 {
-            "📄"
-        } else {
-            "⚙️"
-        };
 
         let workspace_title = self
             .workspace_root
@@ -967,8 +1156,16 @@ impl Render for ArcadeShell {
                     .bg(theme.bg_canvas)
                     .border_b_1()
                     .border_color(theme.border_subtle)
-                    // Active Tab (buffer.rs) - Index 0
-                    .child(
+                    .children(self.tabs.iter().enumerate().map(|(idx, tab)| {
+                        let is_active = idx == active_tab;
+                        let is_dirty = tab.history.is_dirty(tab.document.revision());
+                        let icon = match tab.language {
+                            LanguageId::Rust => "🦀",
+                            LanguageId::Markdown => "📄",
+                            LanguageId::Toml | LanguageId::Yaml | LanguageId::Json => "⚙️",
+                            LanguageId::PlainText => "📝",
+                        };
+
                         div()
                             .flex()
                             .items_center()
@@ -976,48 +1173,57 @@ impl Render for ArcadeShell {
                             .px_3()
                             .py_1p5()
                             .rounded_t_lg()
-                            .bg(if active_tab == 0 {
+                            .bg(if is_active {
                                 theme.bg_surface_glass
                             } else {
                                 theme.bg_canvas
                             })
                             .border_1()
-                            .border_color(if active_tab == 0 {
+                            .border_color(if is_active {
                                 theme.border_glass
                             } else {
                                 gpui::rgba(0x00000000)
                             })
                             .border_b_0()
                             .border_t_2()
-                            .border_color(if active_tab == 0 {
+                            .border_color(if is_active {
                                 theme.syntax_cyan
                             } else {
                                 gpui::rgba(0x00000000)
                             })
                             .cursor_pointer()
-                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                this.select_tab(0);
+                            .hover(|s| s.bg(theme.bg_hover_glass))
+                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
+                                this.select_tab(idx);
                                 cx.notify();
                             }))
                             .child(
                                 div()
-                                    .text_color(theme.syntax_cyan)
+                                    .text_color(if is_active {
+                                        theme.syntax_cyan
+                                    } else {
+                                        theme.text_muted
+                                    })
                                     .text_size(px(12.0))
-                                    .child(active_tab_icon),
+                                    .child(icon),
                             )
                             .child(
                                 div()
                                     .text_size(px(12.5))
-                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                    .text_color(if active_tab == 0 {
+                                    .font_weight(if is_active {
+                                        gpui::FontWeight::MEDIUM
+                                    } else {
+                                        gpui::FontWeight::NORMAL
+                                    })
+                                    .text_color(if is_active {
                                         theme.text_bright
                                     } else {
                                         theme.text_secondary
                                     })
-                                    .child(if active_tab == 0 && self.history.is_dirty(self.document.revision()) {
-                                        format!("{} •", active_tab_title)
+                                    .child(if is_dirty {
+                                        format!("{} •", tab.title)
                                     } else {
-                                        active_tab_title.to_string()
+                                        tab.title.clone()
                                     }),
                             )
                             .child(
@@ -1027,145 +1233,15 @@ impl Render for ArcadeShell {
                                     .hover(|s| s.text_color(theme.syntax_magenta))
                                     .text_size(px(11.0))
                                     .cursor_pointer()
-                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
                                         cx.stop_propagation();
-                                        this.select_tab(0);
+                                        this.close_tab(idx);
                                         cx.notify();
                                     }))
                                     .child("×"),
-                            ),
-                    )
-                    // Tab 1 (Terminal ir) - Index 1
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .px_3()
-                            .py_1p5()
-                            .rounded_t_lg()
-                            .bg(if active_tab == 1 || self.show_terminal {
-                                theme.bg_surface_glass
-                            } else {
-                                theme.bg_canvas
-                            })
-                            .border_1()
-                            .border_color(if active_tab == 1 || self.show_terminal {
-                                theme.border_glass
-                            } else {
-                                gpui::rgba(0x00000000)
-                            })
-                            .border_b_0()
-                            .border_t_2()
-                            .border_color(if active_tab == 1 || self.show_terminal {
-                                theme.syntax_green
-                            } else {
-                                gpui::rgba(0x00000000)
-                            })
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.bg_hover_glass))
-                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                this.show_terminal = true;
-                                this.terminal_focused = true;
-                                cx.notify();
-                            }))
-                            .child(
-                                div()
-                                    .text_color(theme.syntax_green)
-                                    .text_size(px(12.0))
-                                    .child("📟"),
                             )
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .text_color(if self.show_terminal {
-                                        theme.text_bright
-                                    } else {
-                                        theme.text_secondary
-                                    })
-                                    .child("Terminal (ir)"),
-                            )
-                            .child(
-                                div()
-                                    .ml_1()
-                                    .text_color(theme.text_muted)
-                                    .hover(|s| s.text_color(theme.syntax_magenta))
-                                    .text_size(px(11.0))
-                                    .cursor_pointer()
-                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                        cx.stop_propagation();
-                                        this.show_terminal = false;
-                                        this.terminal_focused = false;
-                                        cx.notify();
-                                    }))
-                                    .child("×"),
-                            ),
-                    )
-                    // Inactive Tab 2 (Cargo.toml) - Index 2
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .px_3()
-                            .py_1p5()
-                            .rounded_t_lg()
-                            .bg(if active_tab == 2 {
-                                theme.bg_surface_glass
-                            } else {
-                                theme.bg_canvas
-                            })
-                            .border_1()
-                            .border_color(if active_tab == 2 {
-                                theme.border_glass
-                            } else {
-                                gpui::rgba(0x00000000)
-                            })
-                            .border_b_0()
-                            .border_t_2()
-                            .border_color(if active_tab == 2 {
-                                theme.syntax_orange
-                            } else {
-                                gpui::rgba(0x00000000)
-                            })
-                            .cursor_pointer()
-                            .hover(|s| s.bg(theme.bg_hover_glass))
-                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                this.select_tab(2);
-                                cx.notify();
-                            }))
-                            .child(
-                                div()
-                                    .text_color(theme.syntax_orange)
-                                    .text_size(px(12.0))
-                                    .child("⚙️"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .text_color(if active_tab == 2 {
-                                        theme.text_bright
-                                    } else {
-                                        theme.text_secondary
-                                    })
-                                    .child("Cargo.toml"),
-                            )
-                            .child(
-                                div()
-                                    .ml_1()
-                                    .text_color(theme.text_muted)
-                                    .hover(|s| s.text_color(theme.syntax_magenta))
-                                    .text_size(px(11.0))
-                                    .cursor_pointer()
-                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                        cx.stop_propagation();
-                                        this.select_tab(0);
-                                        cx.notify();
-                                    }))
-                                    .child("×"),
-                            ),
-                    )
-                    // Add Tab Button
+                    }))
+                    // Add Tab Button (+)
                     .child(
                         div()
                             .px_2()
@@ -1175,7 +1251,7 @@ impl Render for ArcadeShell {
                             .cursor_pointer()
                             .hover(|s| s.bg(theme.bg_hover_glass).text_color(theme.text_bright))
                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                this.select_tab(0);
+                                this.new_tab();
                                 cx.notify();
                             }))
                             .child("+"),
@@ -1538,6 +1614,9 @@ impl Render for ArcadeShell {
                                 let lang_label = match self.language {
                                     LanguageId::Rust => "Rust",
                                     LanguageId::Markdown => "Markdown",
+                                    LanguageId::Toml => "TOML",
+                                    LanguageId::Yaml => "YAML",
+                                    LanguageId::Json => "JSON",
                                     LanguageId::PlainText => "Plain Text",
                                 };
                                 div()
@@ -1621,12 +1700,62 @@ mod tests {
     fn switches_active_tabs() {
         let mut shell = ArcadeShell::test_stub();
         assert_eq!(shell.active_tab, 0);
+        assert_eq!(shell.tabs.len(), 1);
 
-        shell.select_tab(1);
+        // Open a new tab
+        shell.new_tab();
+        assert_eq!(shell.tabs.len(), 2);
         assert_eq!(shell.active_tab, 1);
 
-        shell.select_tab(2);
-        assert_eq!(shell.active_tab, 2);
+        // Type something in tab 1
+        shell.insert_text("fn tab_one() {}\n");
+        assert!(shell.document.to_string().contains("tab_one"));
+
+        // Switch back to tab 0
+        shell.select_tab(0);
+        assert_eq!(shell.active_tab, 0);
+        assert!(!shell.document.to_string().contains("tab_one"));
+        assert!(shell.document.to_string().contains("ArcadeEdit Test Document"));
+
+        // Switch back to tab 1 and verify content was preserved
+        shell.select_tab(1);
+        assert_eq!(shell.active_tab, 1);
+        assert!(shell.document.to_string().contains("tab_one"));
+
+        // Close tab 1
+        shell.close_tab(1);
+        assert_eq!(shell.tabs.len(), 1);
+        assert_eq!(shell.active_tab, 0);
+        assert!(shell.document.to_string().contains("ArcadeEdit Test Document"));
+    }
+
+    #[test]
+    fn opens_multiple_files_in_tabs_and_deduplicates() {
+        let mut shell = ArcadeShell::test_stub();
+        let cargo_toml_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+        let lib_rs_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src").join("lib.rs");
+
+        // 1. Open Cargo.toml (replaces initial Welcome stub)
+        shell.open_file(cargo_toml_path.clone()).expect("Failed to open Cargo.toml");
+        assert_eq!(shell.tabs.len(), 1);
+        assert_eq!(shell.active_tab, 0);
+        assert_eq!(shell.current_file_path, Some(cargo_toml_path.clone()));
+        assert_eq!(shell.language, LanguageId::Toml);
+        assert!(!shell.highlight_spans.is_empty(), "TOML syntax spans should be computed synchronously");
+
+        // 2. Open lib.rs in a new tab
+        shell.open_file(lib_rs_path.clone()).expect("Failed to open lib.rs");
+        assert_eq!(shell.tabs.len(), 2);
+        assert_eq!(shell.active_tab, 1);
+        assert_eq!(shell.current_file_path, Some(lib_rs_path.clone()));
+        assert_eq!(shell.language, LanguageId::Rust);
+        assert!(!shell.highlight_spans.is_empty(), "Rust syntax spans should be computed synchronously");
+
+        // 3. Re-open Cargo.toml (should switch to existing tab at index 0 without duplicating)
+        shell.open_file(cargo_toml_path.clone()).expect("Failed to re-open Cargo.toml");
+        assert_eq!(shell.tabs.len(), 2, "Re-opening existing file must not create a duplicate tab");
+        assert_eq!(shell.active_tab, 0);
+        assert_eq!(shell.current_file_path, Some(cargo_toml_path));
     }
 
     #[test]

@@ -5,12 +5,14 @@
 
 pub mod highlight;
 pub mod markdown;
+pub mod scanners;
 pub mod service;
 
 pub use highlight::{
     map_capture_name, resolve_line_tokens, HighlightKind, HighlightSpan, LineToken,
 };
 pub use markdown::highlight_markdown;
+pub use scanners::{highlight_json, highlight_toml, highlight_yaml};
 pub use service::{HighlightRequest, HighlightResponse, HighlightWorker, LanguageId, LanguageService};
 
 /// Reports whether syntax services should be requested for a document.

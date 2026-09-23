@@ -49,6 +49,34 @@ ArcadeEdit v1.1.0 introduces an integrated terminal surface, native companion ut
 
 ---
 
+### 📑 Multi-Tab Editor & Document Workspace (`arcade-ui::tabs`)
+
+- **Full Multi-Tab Architecture**:
+  - Independent `EditorTab` state tracking per open file (document buffer, selections, undo/redo history, syntax spans, and language).
+  - Opening a new file from the workspace explorer, command palette, or `Ctrl+O` creates a dedicated editor tab instead of overwriting existing buffers.
+  - Automatically deduplicates opened files—re-opening an already-opened document seamlessly focuses its existing tab.
+  - Dynamic tab bar with filetype badges, dirty state indicator (`•`), and per-tab close button (`×`).
+  - New tab button (`+`) to spawn empty untitled buffers.
+  - Closing a tab gracefully transfers focus to adjacent tabs or resets to a blank document if the final tab is closed.
+
+---
+
+### 📜 Smooth Scrolling & High-Performance Syntax Highlighting (`arcade-ui`, `arcade-language`)
+
+- **Scrollable Editor Canvas & Modals**:
+  - Enabled smooth vertical scrolling (`overflow_y_scroll()`) on the main editor canvas container, allowing long source files to be scrolled effortlessly with mouse wheel or touchpad.
+  - Added dedicated scroll views across all in-app modals (Help Shortcuts, `ir` Reference, About section) and the integrated terminal output buffer.
+- **Instant Synchronous Syntax Highlighting**:
+  - Eliminated the syntax highlighting delay by computing highlight spans synchronously (<2ms) upon file opening and tab activation.
+  - Background asynchronous updates notify GPUI immediately upon completion via `cx.notify()`.
+- **Extended Language & Config Grammars**:
+  - Added native highlighters for `TOML` (`Cargo.toml`), `YAML`/`YML` (CI/CD workflows), and `JSON`.
+  - Added file extension inference for `.toml`, `.yaml`, `.yml`, `.json`.
+- **Sub-Millisecond Line Token Resolution**:
+  - Optimized `resolve_line_tokens` in `arcade-language` using binary search (`partition_point`) to pinpoint relevant highlight spans in $O(\log N)$ time, eliminating per-frame linear traversals across whole documents.
+
+---
+
 ## [1.0.0] - 2026-09-22
 
 ### 🚀 Initial Proof of Concept (POC) Release

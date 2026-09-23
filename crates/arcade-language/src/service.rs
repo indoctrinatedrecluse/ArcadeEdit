@@ -2,6 +2,7 @@
 
 use crate::highlight::{map_capture_name, HighlightSpan};
 use crate::markdown::highlight_markdown;
+use crate::scanners::{highlight_json, highlight_toml, highlight_yaml};
 use arcade_core::Revision;
 use std::path::Path;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
@@ -15,6 +16,12 @@ pub enum LanguageId {
     Rust,
     /// Markdown documentation (`.md`, `.markdown`).
     Markdown,
+    /// TOML configuration files (`.toml`, `Cargo.lock`).
+    Toml,
+    /// YAML configuration and workflows (`.yaml`, `.yml`).
+    Yaml,
+    /// JSON structured data (`.json`).
+    Json,
     /// Plain text without specialized grammar parsing.
     PlainText,
 }
@@ -25,12 +32,20 @@ impl LanguageId {
         match ext.to_lowercase().as_str() {
             "rs" => Self::Rust,
             "md" | "markdown" => Self::Markdown,
+            "toml" | "lock" => Self::Toml,
+            "yaml" | "yml" => Self::Yaml,
+            "json" => Self::Json,
             _ => Self::PlainText,
         }
     }
 
     /// Infers the language identifier from a file path.
     pub fn from_path(path: &Path) -> Self {
+        if let Some(file_name) = path.file_name().and_then(|s| s.to_str()) {
+            if file_name.eq_ignore_ascii_case("Cargo.lock") {
+                return Self::Toml;
+            }
+        }
         path.extension()
             .and_then(|s| s.to_str())
             .map(Self::from_extension)
@@ -72,11 +87,16 @@ impl LanguageService {
 
     /// Generates syntax highlight spans for the given text and language.
     pub fn highlight(&mut self, language: LanguageId, text: &str) -> Vec<HighlightSpan> {
-        match language {
+        let mut spans = match language {
             LanguageId::Rust => self.highlight_rust(text),
             LanguageId::Markdown => highlight_markdown(text),
+            LanguageId::Toml => highlight_toml(text),
+            LanguageId::Yaml => highlight_yaml(text),
+            LanguageId::Json => highlight_json(text),
             LanguageId::PlainText => Vec::new(),
-        }
+        };
+        spans.sort_by_key(|s| s.start_byte);
+        spans
     }
 
     fn highlight_rust(&mut self, text: &str) -> Vec<HighlightSpan> {

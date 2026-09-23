@@ -132,9 +132,10 @@ pub fn render_live_editor_surface(
         // Main Editor Code Canvas
         .child(
             div()
+                .id("editor-canvas-scroll")
                 .flex_1()
                 .flex()
-                .overflow_hidden()
+                .overflow_y_scroll()
                 // Gutter & Lines container
                 .child(
                     div()

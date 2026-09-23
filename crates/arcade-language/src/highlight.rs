@@ -148,11 +148,25 @@ pub fn resolve_line_tokens(
 
     let line_end_byte = line_start_byte + line_text.len();
 
-    // Filter relevant spans that overlap this line
-    let relevant_spans: Vec<&HighlightSpan> = spans
-        .iter()
-        .filter(|s| s.start_byte < line_end_byte && s.end_byte > line_start_byte)
-        .collect();
+    // Filter relevant spans that overlap this line efficiently using binary search
+    let relevant_spans: Vec<&HighlightSpan> = if spans.len() > 16 {
+        let start_idx = spans.partition_point(|s| s.end_byte <= line_start_byte);
+        let mut rel = Vec::new();
+        for span in &spans[start_idx..] {
+            if span.start_byte >= line_end_byte {
+                break;
+            }
+            if span.start_byte < line_end_byte && span.end_byte > line_start_byte {
+                rel.push(span);
+            }
+        }
+        rel
+    } else {
+        spans
+            .iter()
+            .filter(|s| s.start_byte < line_end_byte && s.end_byte > line_start_byte)
+            .collect()
+    };
 
     if relevant_spans.is_empty() {
         return vec![LineToken::new(line_text, HighlightKind::PlainText)];
