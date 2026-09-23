@@ -583,6 +583,7 @@ pub fn render_terminal_panel(
             div()
                 .id("terminal-output-scroll")
                 .flex_1()
+                .min_h_0()
                 .p_3()
                 .overflow_y_scroll()
                 .flex()

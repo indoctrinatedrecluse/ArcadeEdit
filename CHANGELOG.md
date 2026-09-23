@@ -85,19 +85,24 @@ ArcadeEdit v1.1.0 introduces an integrated terminal surface, native companion ut
 
 ---
 
-### 📜 Smooth Scrolling & High-Performance Syntax Highlighting (`arcade-ui`, `arcade-language`)
+### 📜 Smooth Scrolling, Monospace Typography & Vibrant Syntax Highlighting (`arcade-ui`, `arcade-language`)
 
-- **Scrollable Editor Canvas & Modals**:
-  - Enabled smooth vertical scrolling (`overflow_y_scroll()`) on the main editor canvas container, allowing long source files to be scrolled effortlessly with mouse wheel or touchpad.
+- **Scrollable Editor Canvas & Constrained Flex Layout**:
+  - Solved the unconstrained flexbox height bug by applying `.min_h_0()` across the entire GPUI layout chain (`Main Workspace` -> `Main Editor Area` -> `Live Editor Surface` -> `#editor-canvas-scroll`).
+  - Integrated `gpui::ScrollHandle` on `#editor-canvas-scroll` with automatic cursor tracking (`scroll_cursor_into_view`) on arrow navigation, Enter, Backspace, and Find matches.
+  - Separated the glassy Minimap rail into a fixed right-hand column so it remains pinned to the editor edge while code lines scroll smoothly.
   - Added dedicated scroll views across all in-app modals (Help Shortcuts, `ir` Reference, About section) and the integrated terminal output buffer.
+- **Persistent Bottom Terminal Dock**:
+  - Fixed terminal pane disappearance on file switching: with `.min_h_0()` on the editor container, long documents are properly constrained to the viewport and no longer push the 260px docked terminal panel off-screen.
+  - The integrated terminal remains docked, persistent, and accessible across all open file tabs and tab switches.
+- **Accurate & Vibrant Syntax Highlighting**:
+  - Fixed a critical binary search bug in `resolve_line_tokens` (`arcade-language`) where `partition_point` operated on `end_byte` over a slice sorted by `start_byte`, which previously caused files with $>16$ spans to drop all highlights. Replaced with strictly monotonic partitioning on `start_byte` with backward candidate scanning.
+  - Expanded Tree-Sitter capture classifications: mapped `@boolean` to numeric constants, `@property` and `@field` to variables, `@constructor`, `@module`, and `@namespace` to types, `@method` to functions, and `@attribute` / `@label` to attributes.
+  - Upgraded editor typography to a dedicated monospace font stack (`Consolas, 'Cascadia Code', 'Fira Code', 'Courier New', monospace`) for both the line number gutter and code lines.
+  - Elevated variable token colors to `theme.text_bright` (warm crisp white in Solarized Dark, deep navy in Solarized Light) for striking visual pop against keywords, functions, types, and comments.
 - **Instant Synchronous Syntax Highlighting**:
-  - Eliminated the syntax highlighting delay by computing highlight spans synchronously (<2ms) upon file opening and tab activation.
-  - Background asynchronous updates notify GPUI immediately upon completion via `cx.notify()`.
-- **Extended Language & Config Grammars**:
-  - Added native highlighters for `TOML` (`Cargo.toml`), `YAML`/`YML` (CI/CD workflows), and `JSON`.
-  - Added file extension inference for `.toml`, `.yaml`, `.yml`, `.json`.
-- **Sub-Millisecond Line Token Resolution**:
-  - Optimized `resolve_line_tokens` in `arcade-language` using binary search (`partition_point`) to pinpoint relevant highlight spans in $O(\log N)$ time, eliminating per-frame linear traversals across whole documents.
+  - Computes highlight spans synchronously upon file opening and tab activation (<2ms), eliminating initial rendering delay.
+  - Extended native grammars for `TOML` (`Cargo.toml`), `YAML`/`YML` (CI/CD workflows), and `JSON`.
 
 ---
 

@@ -3,7 +3,7 @@
 use crate::theme::SolarizedTheme;
 use arcade_core::{Document, SelectionSet, TextRange};
 use arcade_language::{resolve_line_tokens, HighlightKind, HighlightSpan, LineToken};
-use gpui::{div, prelude::*, px, Div, IntoElement};
+use gpui::{div, prelude::*, px, Div, IntoElement, ScrollHandle};
 
 /// Represents a syntax-highlighted visual token (preserved for backward compatibility).
 #[derive(Clone, Debug)]
@@ -55,7 +55,7 @@ pub fn render_token(theme: &SolarizedTheme, token: &LineToken) -> Div {
         HighlightKind::Punctuation => theme.text_secondary,
         HighlightKind::Macro => theme.syntax_cyan,
         HighlightKind::Attribute => theme.syntax_violet,
-        HighlightKind::Variable => theme.text_primary,
+        HighlightKind::Variable => theme.text_bright,
         HighlightKind::Constant => theme.syntax_orange,
         HighlightKind::Heading => theme.syntax_yellow,
         HighlightKind::Code => theme.syntax_green,
@@ -74,6 +74,7 @@ pub fn render_live_editor_surface(
     highlight_spans: &[HighlightSpan],
     find_matches: &[TextRange],
     active_match: Option<TextRange>,
+    scroll_handle: &ScrollHandle,
 ) -> impl IntoElement {
     let rope = document.rope();
     let num_lines = document.len_lines();
@@ -89,7 +90,8 @@ pub fn render_live_editor_surface(
     }
 
     div()
-        .flex_1()
+        .size_full()
+        .min_h_0()
         .flex()
         .flex_col()
         .bg(theme.bg_canvas)
@@ -131,143 +133,154 @@ pub fn render_live_editor_surface(
                         .child(format!("● {} cursors", selections.len())),
                 ),
         )
-        // Main Editor Code Canvas
+        // Main Editor Code Canvas and Minimap Row
         .child(
             div()
-                .id("editor-canvas-scroll")
                 .flex_1()
+                .min_h_0()
                 .flex()
-                .overflow_y_scroll()
-                // Gutter & Lines container
+                // Scrollable Lines Area
                 .child(
                     div()
+                        .id("editor-canvas-scroll")
+                        .track_scroll(scroll_handle)
                         .flex_1()
-                        .py_3()
-                        .flex()
-                        .flex_col()
-                        .children((0..num_lines).map(|line_idx| {
-                            let line_slice = rope.line(line_idx);
-                            let line_str = line_slice.to_string();
-                            // Strip line endings for clean rendering
-                            let clean_str = line_str.trim_end_matches(&['\r', '\n'][..]);
-
-                            // Check if this line has any cursor
-                            let matching_cursor = cursors_by_line
-                                .iter()
-                                .find(|(l, _)| *l == line_idx)
-                                .map(|(_, col)| *col);
-                            let is_active = matching_cursor.is_some();
-
-                            let line_start_byte = rope.line_to_byte(line_idx);
-                            let line_end_byte = line_start_byte + clean_str.len();
-
-                            let has_active_match = active_match.map_or(false, |m| m.start.0 < line_end_byte && m.end.0 > line_start_byte);
-                            let has_any_match = find_matches.iter().any(|m| m.start.0 < line_end_byte && m.end.0 > line_start_byte);
-
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        // Gutter & Lines container
+                        .child(
                             div()
-                                .flex()
-                                .items_center()
-                                .h(px(22.0))
                                 .w_full()
-                                // Active Line or Find Match Horizontal Sheen
-                                .bg(if is_active {
-                                    theme.bg_active_glass
-                                } else if has_active_match {
-                                    gpui::rgba(0x2aa1982c)
-                                } else if has_any_match {
-                                    gpui::rgba(0xb5890018)
-                                } else {
-                                    gpui::rgba(0x00000000)
-                                })
-                                .border_l_2()
-                                .border_color(if is_active || has_active_match {
-                                    theme.syntax_cyan
-                                } else if has_any_match {
-                                    theme.syntax_yellow
-                                } else {
-                                    gpui::rgba(0x00000000)
-                                })
-                                // Line Number Gutter
-                                .child(
+                                .py_3()
+                                .flex()
+                                .flex_col()
+                                .children((0..num_lines).map(|line_idx| {
+                                    let line_slice = rope.line(line_idx);
+                                    let line_str = line_slice.to_string();
+                                    // Strip line endings for clean rendering
+                                    let clean_str = line_str.trim_end_matches(&['\r', '\n'][..]);
+
+                                    // Check if this line has any cursor
+                                    let matching_cursor = cursors_by_line
+                                        .iter()
+                                        .find(|(l, _)| *l == line_idx)
+                                        .map(|(_, col)| *col);
+                                    let is_active = matching_cursor.is_some();
+
+                                    let line_start_byte = rope.line_to_byte(line_idx);
+                                    let line_end_byte = line_start_byte + clean_str.len();
+
+                                    let has_active_match = active_match.map_or(false, |m| m.start.0 < line_end_byte && m.end.0 > line_start_byte);
+                                    let has_any_match = find_matches.iter().any(|m| m.start.0 < line_end_byte && m.end.0 > line_start_byte);
+
                                     div()
-                                        .w(px(52.0))
-                                        .pr_4()
                                         .flex()
-                                        .justify_end()
-                                        .text_size(px(12.0))
-                                        .text_color(if is_active || has_active_match {
+                                        .items_center()
+                                        .h(px(22.0))
+                                        .w_full()
+                                        // Active Line or Find Match Horizontal Sheen
+                                        .bg(if is_active {
+                                            theme.bg_active_glass
+                                        } else if has_active_match {
+                                            gpui::rgba(0x2aa1982c)
+                                        } else if has_any_match {
+                                            gpui::rgba(0xb5890018)
+                                        } else {
+                                            gpui::rgba(0x00000000)
+                                        })
+                                        .border_l_2()
+                                        .border_color(if is_active || has_active_match {
                                             theme.syntax_cyan
                                         } else if has_any_match {
                                             theme.syntax_yellow
                                         } else {
-                                            theme.text_muted
+                                            gpui::rgba(0x00000000)
                                         })
-                                        .child(format!("{}", line_idx + 1)),
-                                )
-                                // Highlighted Code Spans and Cursor
-                                .child({
-                                    let mut line_container = div()
-                                        .flex()
-                                        .items_center()
-                                        .text_size(px(13.0));
-
-                                    if let Some(cursor_col) = matching_cursor {
-                                        let chars: Vec<char> = clean_str.chars().collect();
-                                        let col = std::cmp::min(cursor_col, chars.len());
-
-                                        let before_str: String = chars[..col].iter().collect();
-                                        let after_str: String = chars[col..].iter().collect();
-
-                                        let before_tokens = resolve_line_tokens(
-                                            &before_str,
-                                            line_start_byte,
-                                            highlight_spans,
-                                        );
-                                        let after_tokens = resolve_line_tokens(
-                                            &after_str,
-                                            line_start_byte + before_str.len(),
-                                            highlight_spans,
-                                        );
-
-                                        for tok in &before_tokens {
-                                            line_container =
-                                                line_container.child(render_token(theme, tok));
-                                        }
-
-                                        // Glowing Cyan Vertical Cursor
-                                        line_container = line_container.child(
+                                        // Line Number Gutter
+                                        .child(
                                             div()
-                                                .w(px(2.0))
-                                                .h(px(16.0))
-                                                .bg(theme.syntax_cyan)
-                                                .rounded_full()
-                                                .shadow_sm(),
-                                        );
+                                                .w(px(52.0))
+                                                .pr_4()
+                                                .flex()
+                                                .justify_end()
+                                                .font_family("Consolas, 'Cascadia Code', 'Fira Code', 'Courier New', monospace")
+                                                .text_size(px(12.0))
+                                                .text_color(if is_active || has_active_match {
+                                                    theme.syntax_cyan
+                                                } else if has_any_match {
+                                                    theme.syntax_yellow
+                                                } else {
+                                                    theme.text_muted
+                                                })
+                                                .child(format!("{}", line_idx + 1)),
+                                        )
+                                        // Highlighted Code Spans and Cursor
+                                        .child({
+                                            let mut line_container = div()
+                                                .flex()
+                                                .items_center()
+                                                .font_family("Consolas, 'Cascadia Code', 'Fira Code', 'Courier New', monospace")
+                                                .text_size(px(13.0));
 
-                                        for tok in &after_tokens {
-                                            line_container =
-                                                line_container.child(render_token(theme, tok));
-                                        }
-                                    } else {
-                                        let tokens = resolve_line_tokens(
-                                            clean_str,
-                                            line_start_byte,
-                                            highlight_spans,
-                                        );
-                                        for tok in &tokens {
-                                            line_container =
-                                                line_container.child(render_token(theme, tok));
-                                        }
-                                    }
+                                            if let Some(cursor_col) = matching_cursor {
+                                                let chars: Vec<char> = clean_str.chars().collect();
+                                                let col = std::cmp::min(cursor_col, chars.len());
 
-                                    line_container
-                                })
-                        })),
+                                                let before_str: String = chars[..col].iter().collect();
+                                                let after_str: String = chars[col..].iter().collect();
+
+                                                let before_tokens = resolve_line_tokens(
+                                                    &before_str,
+                                                    line_start_byte,
+                                                    highlight_spans,
+                                                );
+                                                let after_tokens = resolve_line_tokens(
+                                                    &after_str,
+                                                    line_start_byte + before_str.len(),
+                                                    highlight_spans,
+                                                );
+
+                                                for tok in &before_tokens {
+                                                    line_container =
+                                                        line_container.child(render_token(theme, tok));
+                                                }
+
+                                                // Glowing Cyan Vertical Cursor
+                                                line_container = line_container.child(
+                                                    div()
+                                                        .w(px(2.0))
+                                                        .h(px(16.0))
+                                                        .bg(theme.syntax_cyan)
+                                                        .rounded_full()
+                                                        .shadow_sm(),
+                                                );
+
+                                                for tok in &after_tokens {
+                                                    line_container =
+                                                        line_container.child(render_token(theme, tok));
+                                                }
+                                            } else {
+                                                let tokens = resolve_line_tokens(
+                                                    clean_str,
+                                                    line_start_byte,
+                                                    highlight_spans,
+                                                );
+                                                for tok in &tokens {
+                                                    line_container =
+                                                        line_container.child(render_token(theme, tok));
+                                                }
+                                            }
+
+                                            line_container
+                                        })
+                                })),
+                        ),
                 )
-                // Glassy Scroll / Minimap Rail
+                // Glassy Scroll / Minimap Rail (pinned to the right edge)
                 .child(
                     div()
                         .w(px(48.0))
+                        .h_full()
                         .bg(theme.bg_surface_glass)
                         .border_l_1()
                         .border_color(theme.border_subtle)

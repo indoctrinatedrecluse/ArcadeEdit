@@ -21,7 +21,7 @@ use arcade_language::{HighlightSpan, HighlightWorker, LanguageId, LanguageServic
 use command_palette::{default_commands, render_command_palette, CommandItem};
 use editor_view::render_live_editor_surface;
 use find_replace::{render_find_replace_bar, FindFocus, FindKeyAction, FindReplaceState};
-use gpui::{div, prelude::*, px, Context, FocusHandle, IntoElement, Render, Window};
+use gpui::{div, prelude::*, px, Context, FocusHandle, IntoElement, Render, ScrollHandle, Window};
 use help_modal::{render_help_modal, HelpSection};
 use terminal::{render_terminal_panel, TerminalLine, TerminalLineKind, TerminalState};
 use theme::SolarizedTheme;
@@ -133,6 +133,8 @@ pub struct ArcadeShell {
     pub find_replace: FindReplaceState,
     /// Set of expanded folder paths in the workspace sidebar.
     pub expanded_folders: BTreeSet<PathBuf>,
+    /// Scroll handle controlling the main editor canvas viewport.
+    pub editor_scroll_handle: ScrollHandle,
 }
 
 impl ArcadeShell {
@@ -190,6 +192,7 @@ impl ArcadeShell {
             active_help_section: HelpSection::IrDocs,
             find_replace: FindReplaceState::new(),
             expanded_folders: BTreeSet::new(),
+            editor_scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -234,6 +237,7 @@ impl ArcadeShell {
             active_help_section: HelpSection::IrDocs,
             find_replace: FindReplaceState::new(),
             expanded_folders: BTreeSet::new(),
+            editor_scroll_handle: ScrollHandle::new(),
         }
     }
 
@@ -626,6 +630,13 @@ impl ArcadeShell {
                 self.document.to_string(),
             );
         }
+    }
+
+    /// Ensures that the primary cursor position is scrolled into view.
+    pub fn scroll_cursor_into_view(&self) {
+        let primary_head = self.selections.primary().head;
+        let line_idx = self.document.line_of_byte(primary_head);
+        self.editor_scroll_handle.scroll_to_item(line_idx);
     }
 
     /// Opens the in-editor Find bar.
@@ -1136,11 +1147,13 @@ impl Render for ArcadeShell {
                 // Navigation: Up / Down
                 if key == "up" {
                     this.selections = this.selections.move_up(this.document.rope(), shift);
+                    this.scroll_cursor_into_view();
                     cx.notify();
                     return;
                 }
                 if key == "down" {
                     this.selections = this.selections.move_down(this.document.rope(), shift);
+                    this.scroll_cursor_into_view();
                     cx.notify();
                     return;
                 }
@@ -1148,11 +1161,13 @@ impl Render for ArcadeShell {
                 // Navigation: Home / End
                 if key == "home" {
                     this.selections = this.selections.move_to_line_start(this.document.rope(), shift);
+                    this.scroll_cursor_into_view();
                     cx.notify();
                     return;
                 }
                 if key == "end" {
                     this.selections = this.selections.move_to_line_end(this.document.rope(), shift);
+                    this.scroll_cursor_into_view();
                     cx.notify();
                     return;
                 }
@@ -1160,6 +1175,7 @@ impl Render for ArcadeShell {
                 // Backspace
                 if key == "backspace" {
                     this.delete_backward();
+                    this.scroll_cursor_into_view();
                     cx.notify();
                     return;
                 }
@@ -1167,6 +1183,7 @@ impl Render for ArcadeShell {
                 // Enter / Return
                 if key == "enter" {
                     this.insert_text("\n");
+                    this.scroll_cursor_into_view();
                     cx.notify();
                     return;
                 }
@@ -1174,6 +1191,7 @@ impl Render for ArcadeShell {
                 // Tab
                 if key == "tab" {
                     this.insert_text("    ");
+                    this.scroll_cursor_into_view();
                     cx.notify();
                     return;
                 }
@@ -1181,6 +1199,7 @@ impl Render for ArcadeShell {
                 // Text Insertion (Printable characters without Control/Alt)
                 if let Some(ch) = resolve_input_character(event) {
                     this.insert_text(&ch);
+                    this.scroll_cursor_into_view();
                     cx.notify();
                 }
             }))
@@ -1463,6 +1482,7 @@ impl Render for ArcadeShell {
                 div()
                     .flex()
                     .flex_1()
+                    .min_h_0()
                     .relative()
                     // Sidebar
                     .when(show_sidebar, |parent| {
@@ -1615,6 +1635,7 @@ impl Render for ArcadeShell {
                                                 div()
                                                     .id("sidebar-tree-scroll")
                                                     .flex_1()
+                                                    .min_h_0()
                                                     .flex()
                                                     .flex_col()
                                                     .overflow_y_scroll()
@@ -1757,10 +1778,13 @@ impl Render for ArcadeShell {
                             .flex()
                             .flex_col()
                             .flex_1()
+                            .min_h_0()
+                            .min_w_0()
                             .relative()
                             .child(
                                 div()
                                     .flex_1()
+                                    .min_h_0()
                                     .flex()
                                     .relative()
                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
@@ -1775,6 +1799,7 @@ impl Render for ArcadeShell {
                                         &self.highlight_spans,
                                         &self.find_replace.matches,
                                         self.find_replace.current_match(),
+                                        &self.editor_scroll_handle,
                                     ))
                                     .when(self.find_replace.is_open, |p| {
                                         p.child(render_find_replace_bar(&theme, &self.find_replace, cx))

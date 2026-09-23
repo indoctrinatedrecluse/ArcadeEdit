@@ -108,13 +108,17 @@ pub fn map_capture_name(name: &str) -> HighlightKind {
         HighlightKind::Keyword
     } else if name.starts_with("function.macro") {
         HighlightKind::Macro
-    } else if name.starts_with("function") {
+    } else if name.starts_with("function") || name.starts_with("method") {
         HighlightKind::Function
-    } else if name.starts_with("type") {
+    } else if name.starts_with("type")
+        || name.starts_with("constructor")
+        || name.starts_with("module")
+        || name.starts_with("namespace")
+    {
         HighlightKind::Type
     } else if name.starts_with("string") || name.starts_with("character") {
         HighlightKind::String
-    } else if name.starts_with("number") || name.starts_with("float") {
+    } else if name.starts_with("number") || name.starts_with("float") || name.starts_with("boolean") {
         HighlightKind::Number
     } else if name.starts_with("comment") {
         HighlightKind::Comment
@@ -122,10 +126,12 @@ pub fn map_capture_name(name: &str) -> HighlightKind {
         HighlightKind::Operator
     } else if name.starts_with("punctuation") {
         HighlightKind::Punctuation
-    } else if name.starts_with("attribute") {
+    } else if name.starts_with("attribute") || name.starts_with("label") {
         HighlightKind::Attribute
     } else if name.starts_with("constant") {
         HighlightKind::Constant
+    } else if name.starts_with("property") || name.starts_with("field") {
+        HighlightKind::Variable
     } else if name.starts_with("variable") {
         HighlightKind::Variable
     } else {
@@ -148,25 +154,22 @@ pub fn resolve_line_tokens(
 
     let line_end_byte = line_start_byte + line_text.len();
 
-    // Filter relevant spans that overlap this line efficiently using binary search
-    let relevant_spans: Vec<&HighlightSpan> = if spans.len() > 16 {
-        let start_idx = spans.partition_point(|s| s.end_byte <= line_start_byte);
-        let mut rel = Vec::new();
-        for span in &spans[start_idx..] {
-            if span.start_byte >= line_end_byte {
-                break;
-            }
-            if span.start_byte < line_end_byte && span.end_byte > line_start_byte {
-                rel.push(span);
-            }
+    // Spans are strictly sorted by `start_byte`.
+    // All spans that could overlap [line_start_byte, line_end_byte) MUST have start_byte < line_end_byte.
+    // Partition point by start_byte is strictly monotonic and 100% mathematically exact.
+    let end_idx = spans.partition_point(|s| s.start_byte < line_end_byte);
+
+    // Collect overlapping candidate spans from spans[..end_idx] scanning backwards.
+    let mut relevant_spans: Vec<&HighlightSpan> = Vec::new();
+    for span in spans[..end_idx].iter().rev() {
+        if span.end_byte > line_start_byte {
+            relevant_spans.push(span);
+        } else if line_start_byte.saturating_sub(span.start_byte) > 10_000 {
+            // No realistic single token spans more than 10KB prior to this line without overlapping
+            break;
         }
-        rel
-    } else {
-        spans
-            .iter()
-            .filter(|s| s.start_byte < line_end_byte && s.end_byte > line_start_byte)
-            .collect()
-    };
+    }
+    relevant_spans.reverse();
 
     if relevant_spans.is_empty() {
         return vec![LineToken::new(line_text, HighlightKind::PlainText)];
@@ -272,5 +275,71 @@ mod tests {
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].text, "plain text");
         assert_eq!(tokens[0].kind, HighlightKind::PlainText);
+    }
+
+    #[test]
+    fn resolves_line_tokens_with_many_spans_across_multiple_lines() {
+        // Generate 120 spans across 30 lines to test partitioning well beyond threshold of 16
+        let mut spans = Vec::new();
+        let mut line_start = 0;
+        let mut lines = Vec::new();
+
+        for i in 0..30 {
+            let line = format!("pub fn func_{i}(arg: u32) -> u32 {{ arg + {i} }}\n");
+            let func_name = format!("func_{i}");
+            let func_start = line.find(&func_name).unwrap();
+            let u32_start = line.find("u32").unwrap();
+
+            // "pub" (0..3)
+            spans.push(HighlightSpan::new(line_start, line_start + 3, HighlightKind::Keyword));
+            // "fn" (4..6)
+            spans.push(HighlightSpan::new(line_start + 4, line_start + 6, HighlightKind::Keyword));
+            // func_name
+            spans.push(HighlightSpan::new(line_start + func_start, line_start + func_start + func_name.len(), HighlightKind::Function));
+            // "u32"
+            spans.push(HighlightSpan::new(line_start + u32_start, line_start + u32_start + 3, HighlightKind::Type));
+
+            line_start += line.len();
+            lines.push(line);
+        }
+
+        assert_eq!(spans.len(), 120);
+        // Spans are strictly sorted by start_byte
+        spans.sort_by_key(|s| s.start_byte);
+
+        // Verify tokens on line 0
+        let tokens0 = resolve_line_tokens("pub fn func_0(arg: u32) -> u32 { arg + 0 }", 0, &spans);
+        assert!(tokens0.iter().any(|t| t.text == "pub" && t.kind == HighlightKind::Keyword));
+        assert!(tokens0.iter().any(|t| t.text == "fn" && t.kind == HighlightKind::Keyword));
+        assert!(tokens0.iter().any(|t| t.text == "func_0" && t.kind == HighlightKind::Function));
+        assert!(tokens0.iter().any(|t| t.text == "u32" && t.kind == HighlightKind::Type));
+
+        // Verify tokens on line 15 (deep inside document with start_byte > 500)
+        let line15_start: usize = lines[..15].iter().map(|l| l.len()).sum();
+        let tokens15 = resolve_line_tokens("pub fn func_15(arg: u32) -> u32 { arg + 15 }", line15_start, &spans);
+        assert!(tokens15.iter().any(|t| t.text == "pub" && t.kind == HighlightKind::Keyword));
+        assert!(tokens15.iter().any(|t| t.text == "fn" && t.kind == HighlightKind::Keyword));
+        assert!(tokens15.iter().any(|t| t.text == "func_15" && t.kind == HighlightKind::Function));
+        assert!(tokens15.iter().any(|t| t.text == "u32" && t.kind == HighlightKind::Type));
+
+        // Verify tokens on last line 29
+        let line29_start: usize = lines[..29].iter().map(|l| l.len()).sum();
+        let tokens29 = resolve_line_tokens("pub fn func_29(arg: u32) -> u32 { arg + 29 }", line29_start, &spans);
+        assert!(tokens29.iter().any(|t| t.text == "pub" && t.kind == HighlightKind::Keyword));
+        assert!(tokens29.iter().any(|t| t.text == "fn" && t.kind == HighlightKind::Keyword));
+        assert!(tokens29.iter().any(|t| t.text == "func_29" && t.kind == HighlightKind::Function));
+        assert!(tokens29.iter().any(|t| t.text == "u32" && t.kind == HighlightKind::Type));
+    }
+
+    #[test]
+    fn maps_extended_tree_sitter_captures() {
+        assert_eq!(map_capture_name("boolean"), HighlightKind::Number);
+        assert_eq!(map_capture_name("property"), HighlightKind::Variable);
+        assert_eq!(map_capture_name("field"), HighlightKind::Variable);
+        assert_eq!(map_capture_name("constructor"), HighlightKind::Type);
+        assert_eq!(map_capture_name("module"), HighlightKind::Type);
+        assert_eq!(map_capture_name("namespace"), HighlightKind::Type);
+        assert_eq!(map_capture_name("method"), HighlightKind::Function);
+        assert_eq!(map_capture_name("label"), HighlightKind::Attribute);
     }
 }
