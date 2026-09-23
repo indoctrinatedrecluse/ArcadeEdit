@@ -178,14 +178,14 @@ checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
 
 [[package]]
 name = "arcade-core"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "ropey",
 ]
 
 [[package]]
 name = "arcade-desktop"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "arcade-core",
  "arcade-protocol",
@@ -196,7 +196,7 @@ dependencies = [
 
 [[package]]
 name = "arcade-headless"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "arcade-core",
  "arcade-language",
@@ -208,7 +208,7 @@ dependencies = [
 
 [[package]]
 name = "arcade-language"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "arcade-core",
  "streaming-iterator",
@@ -218,7 +218,7 @@ dependencies = [
 
 [[package]]
 name = "arcade-protocol"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -226,7 +226,7 @@ dependencies = [
 
 [[package]]
 name = "arcade-ui"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "arcade-core",
  "arcade-language",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "arcade-workspace"
-version = "0.1.0"
+version = "1.1.0"
 dependencies = [
  "arcade-core",
 ]

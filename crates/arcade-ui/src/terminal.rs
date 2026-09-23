@@ -129,7 +129,7 @@ impl TerminalState {
 
         lines.push(TerminalLine::new(
             TerminalLineKind::Info,
-            "✦ ArcadeEdit Integrated Terminal (v1.0.0)",
+            "✦ ArcadeEdit Integrated Terminal (v1.1.0)",
         ));
         lines.push(TerminalLine::new(
             TerminalLineKind::Info,

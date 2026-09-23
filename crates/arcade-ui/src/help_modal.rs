@@ -1,7 +1,7 @@
 //! Help Menu and in-app Documentation modal for ArcadeEdit.
 //!
 //! Features a dedicated "ir documentation" section detailing the bundled `ir` CLI companion,
-//! alongside an "About" section specifying application name (ArcadeEdit), version (1.0.0),
+//! alongside an "About" section specifying application name (ArcadeEdit), version (1.1.0),
 //! author (indoctrinatedrecluse), system architecture, and keyboard shortcuts.
 
 use crate::theme::SolarizedTheme;
@@ -456,7 +456,7 @@ fn render_about_content(theme: &SolarizedTheme) -> Div {
                                         .border_color(theme.syntax_cyan)
                                         .text_size(px(10.5))
                                         .text_color(theme.syntax_cyan)
-                                        .child("v1.0.0 (POC)"),
+                                        .child("v1.1.0"),
                                 ),
                         )
                         .child(
