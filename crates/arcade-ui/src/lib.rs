@@ -6,10 +6,13 @@
 
 pub mod command_palette;
 pub mod editor_view;
+pub mod find_replace;
 pub mod help_modal;
 pub mod terminal;
 pub mod theme;
+pub mod tree_view;
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use arcade_core::selection::SelectionSet;
@@ -17,10 +20,12 @@ use arcade_core::{ByteOffset, Document, History};
 use arcade_language::{HighlightSpan, HighlightWorker, LanguageId, LanguageService};
 use command_palette::{default_commands, render_command_palette, CommandItem};
 use editor_view::render_live_editor_surface;
+use find_replace::{render_find_replace_bar, FindFocus, FindKeyAction, FindReplaceState};
 use gpui::{div, prelude::*, px, Context, FocusHandle, IntoElement, Render, Window};
 use help_modal::{render_help_modal, HelpSection};
 use terminal::{render_terminal_panel, TerminalLine, TerminalLineKind, TerminalState};
 use theme::SolarizedTheme;
+use tree_view::build_visible_tree;
 
 /// Identifies the custom visual system used by the desktop application.
 pub const DESIGN_SYSTEM_NAME: &str = "ArcadeEdit Solarized Glass";
@@ -124,6 +129,10 @@ pub struct ArcadeShell {
     pub show_help_modal: bool,
     /// The active tab / section inside the Help modal.
     pub active_help_section: HelpSection,
+    /// Floating Find & Replace widget state.
+    pub find_replace: FindReplaceState,
+    /// Set of expanded folder paths in the workspace sidebar.
+    pub expanded_folders: BTreeSet<PathBuf>,
 }
 
 impl ArcadeShell {
@@ -179,6 +188,8 @@ impl ArcadeShell {
             terminal_focused: false,
             show_help_modal: false,
             active_help_section: HelpSection::IrDocs,
+            find_replace: FindReplaceState::new(),
+            expanded_folders: BTreeSet::new(),
         }
     }
 
@@ -221,6 +232,8 @@ impl ArcadeShell {
             terminal_focused: false,
             show_help_modal: false,
             active_help_section: HelpSection::IrDocs,
+            find_replace: FindReplaceState::new(),
+            expanded_folders: BTreeSet::new(),
         }
     }
 
@@ -342,6 +355,7 @@ impl ArcadeShell {
         self.workspace_files = files;
         self.terminal.working_dir = path.clone();
         self.show_sidebar = true;
+        self.expanded_folders.insert(path.clone());
 
         if let Some(preferred) = self
             .workspace_files
@@ -505,6 +519,12 @@ impl ArcadeShell {
                 self.active_help_section = HelpSection::Shortcuts;
                 self.show_help_modal = true;
             }
+            "Find in Document" => {
+                self.open_find();
+            }
+            "Replace in Document" => {
+                self.open_replace();
+            }
             _ => {}
         }
     }
@@ -605,6 +625,101 @@ impl ArcadeShell {
                 self.language,
                 self.document.to_string(),
             );
+        }
+    }
+
+    /// Opens the in-editor Find bar.
+    pub fn open_find(&mut self) {
+        self.find_replace.open_find();
+        self.find_replace.update_matches(self.document.rope());
+        if let Some(m) = self.find_replace.current_match() {
+            self.selections = SelectionSet::cursor(m.start);
+            self.sync_to_active_tab();
+        }
+    }
+
+    /// Opens the in-editor Find & Replace bar with replacement mode enabled.
+    pub fn open_replace(&mut self) {
+        self.find_replace.open_replace();
+        self.find_replace.update_matches(self.document.rope());
+        if let Some(m) = self.find_replace.current_match() {
+            self.selections = SelectionSet::cursor(m.start);
+            self.sync_to_active_tab();
+        }
+    }
+
+    /// Closes the in-editor Find & Replace bar.
+    pub fn close_find(&mut self) {
+        self.find_replace.close();
+    }
+
+    /// Cycles to the next match and places a cursor at its start.
+    pub fn find_next_match(&mut self) {
+        if let Some(m) = self.find_replace.next_match() {
+            self.selections = SelectionSet::cursor(m.start);
+            self.sync_to_active_tab();
+        }
+    }
+
+    /// Cycles to the previous match and places a cursor at its start.
+    pub fn find_prev_match(&mut self) {
+        if let Some(m) = self.find_replace.prev_match() {
+            self.selections = SelectionSet::cursor(m.start);
+            self.sync_to_active_tab();
+        }
+    }
+
+    /// Selects all occurrences of the query across the document as multi-cursors!
+    pub fn select_all_find_matches(&mut self) {
+        if self.find_replace.matches.is_empty() {
+            return;
+        }
+        let first = self.find_replace.matches[0];
+        let mut new_selections = SelectionSet::cursor(first.start);
+        for m in &self.find_replace.matches {
+            new_selections.add(arcade_core::selection::Selection::new(m.start, m.end));
+        }
+        self.selections = new_selections;
+        self.sync_to_active_tab();
+    }
+
+    /// Replaces the currently active match with the replacement string.
+    pub fn replace_current_find_match(&mut self) {
+        if let Some(m) = self.find_replace.current_match() {
+            let edit_sels = SelectionSet::from_selections(vec![arcade_core::Selection::new(m.start, m.end)], 0);
+            if let Ok((tx, new_sels)) = self.document.insert_text_at_selections(&edit_sels, &self.find_replace.replacement) {
+                self.history.push(tx);
+                self.selections = new_sels;
+                self.sync_to_active_tab();
+                self.find_replace.update_matches(self.document.rope());
+                self.trigger_highlight();
+            }
+        }
+    }
+
+    /// Replaces all occurrences of the find query across the document.
+    pub fn replace_all_find_matches(&mut self) {
+        if self.find_replace.query.is_empty() {
+            return;
+        }
+        if let Ok(Some(tx)) = arcade_core::replace_all(
+            &mut self.document,
+            &self.find_replace.query,
+            &self.find_replace.replacement,
+        ) {
+            self.history.push(tx);
+            self.sync_to_active_tab();
+            self.find_replace.update_matches(self.document.rope());
+            self.trigger_highlight();
+        }
+    }
+
+    /// Toggles folder expansion in the workspace directory tree.
+    pub fn toggle_folder_expansion(&mut self, path: PathBuf) {
+        if self.expanded_folders.contains(&path) {
+            self.expanded_folders.remove(&path);
+        } else {
+            self.expanded_folders.insert(path);
         }
     }
 
@@ -832,6 +947,76 @@ impl Render for ArcadeShell {
                     return;
                 }
 
+                // When Find & Replace is visible, route keyboard events to find/replace interactions:
+                if this.find_replace.is_open {
+                    if key == "escape" {
+                        this.close_find();
+                        cx.notify();
+                        return;
+                    }
+                    if ctrl && key == "f" {
+                        this.find_replace.focus = FindFocus::Query;
+                        cx.notify();
+                        return;
+                    }
+                    if ctrl && key == "h" {
+                        this.find_replace.toggle_replace();
+                        cx.notify();
+                        return;
+                    }
+                    let typed_char = resolve_input_character(event);
+                    let action = this.find_replace.handle_key(key, ctrl, shift, typed_char.as_deref());
+                    match action {
+                        FindKeyAction::Close => {
+                            cx.notify();
+                            return;
+                        }
+                        FindKeyAction::FindNext => {
+                            this.find_next_match();
+                            cx.notify();
+                            return;
+                        }
+                        FindKeyAction::FindPrev => {
+                            this.find_prev_match();
+                            cx.notify();
+                            return;
+                        }
+                        FindKeyAction::SelectAllMatches => {
+                            this.select_all_find_matches();
+                            cx.notify();
+                            return;
+                        }
+                        FindKeyAction::ReplaceCurrent => {
+                            this.replace_current_find_match();
+                            cx.notify();
+                            return;
+                        }
+                        FindKeyAction::ReplaceAll => {
+                            this.replace_all_find_matches();
+                            cx.notify();
+                            return;
+                        }
+                        FindKeyAction::QueryChanged => {
+                            this.find_replace.update_matches(this.document.rope());
+                            if let Some(m) = this.find_replace.current_match() {
+                                this.selections = SelectionSet::cursor(m.start);
+                            }
+                            cx.notify();
+                            return;
+                        }
+                        FindKeyAction::ReplacementChanged => {
+                            cx.notify();
+                            return;
+                        }
+                        FindKeyAction::None => {
+                            if key == "tab" || key == "up" || key == "down" || key == "enter" {
+                                cx.notify();
+                                return;
+                            }
+                        }
+                    }
+                }
+
                 // Help Menu Shortcut (F1)
                 if key == "f1" {
                     this.show_help_modal = true;
@@ -866,6 +1051,20 @@ impl Render for ArcadeShell {
                 }
 
                 // Normal Editor Keyboard Shortcuts:
+                // Find in Document (Ctrl+F)
+                if ctrl && key == "f" {
+                    this.open_find();
+                    cx.notify();
+                    return;
+                }
+
+                // Replace in Document (Ctrl+H)
+                if ctrl && key == "h" {
+                    this.open_replace();
+                    cx.notify();
+                    return;
+                }
+
                 // Toggle Command Palette (Ctrl+P)
                 if ctrl && key == "p" {
                     this.toggle_command_palette();
@@ -1335,32 +1534,29 @@ impl Render for ArcadeShell {
                                                 }))
                                                 .child("📂 Open Folder..."),
                                         )
-                                        .when(!self.workspace_files.is_empty(), |el| {
-                                            let root_opt = self.workspace_root.clone();
+                                        .when(self.workspace_root.is_some(), |el| {
+                                            let root = self.workspace_root.as_ref().unwrap();
                                             let current_opt = self.current_file_path.clone();
-                                            let file_nodes: Vec<_> = self.workspace_files.iter().take(120).map(|path| {
-                                                let rel_display = if let Some(root) = &root_opt {
-                                                    path.strip_prefix(root).unwrap_or(path).to_string_lossy().to_string()
-                                                } else {
-                                                    path.file_name().and_then(|n| n.to_str()).unwrap_or("file").to_string()
-                                                };
-                                                let display_name = rel_display.replace('\\', "/");
-                                                let is_active = current_opt.as_ref().map_or(false, |p| p == path);
-                                                let path_clone = path.clone();
+                                            let visible_items = build_visible_tree(root, &self.expanded_folders);
 
-                                                let icon = match path.extension().and_then(|e| e.to_str()).unwrap_or("") {
-                                                    "rs" => "🦀",
-                                                    "md" | "markdown" => "📄",
-                                                    "toml" | "json" | "yaml" | "yml" => "⚙️",
-                                                    "lock" => "🔒",
-                                                    _ => "📝",
+                                            let tree_nodes: Vec<_> = visible_items.into_iter().map(|item| {
+                                                let is_active = !item.is_dir && current_opt.as_ref().map_or(false, |p| p == &item.path);
+                                                let path_clone = item.path.clone();
+                                                let is_dir = item.is_dir;
+                                                let icon = item.icon();
+                                                let toggle_arrow = if item.is_dir {
+                                                    if item.is_expanded { "▾ " } else { "▸ " }
+                                                } else {
+                                                    "  "
                                                 };
+                                                let indent = px(item.depth as f32 * 12.0);
 
                                                 div()
                                                     .flex()
                                                     .items_center()
-                                                    .gap_2()
-                                                    .px_2()
+                                                    .gap_1p5()
+                                                    .pl(indent)
+                                                    .pr_2()
                                                     .py_1()
                                                     .rounded_md()
                                                     .bg(if is_active {
@@ -1376,15 +1572,27 @@ impl Render for ArcadeShell {
                                                     })
                                                     .text_color(if is_active {
                                                         theme.syntax_cyan
+                                                    } else if is_dir {
+                                                        theme.syntax_yellow
                                                     } else {
                                                         theme.text_secondary
                                                     })
                                                     .hover(|s| s.bg(theme.bg_hover_glass))
                                                     .cursor_pointer()
                                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                                                        let _ = this.open_file(path_clone.clone());
+                                                        if is_dir {
+                                                            this.toggle_folder_expansion(path_clone.clone());
+                                                        } else {
+                                                            let _ = this.open_file(path_clone.clone());
+                                                        }
                                                         cx.notify();
                                                     }))
+                                                    .child(
+                                                        div()
+                                                            .text_size(px(10.0))
+                                                            .text_color(theme.text_muted)
+                                                            .child(toggle_arrow),
+                                                    )
                                                     .child(
                                                         div()
                                                             .text_size(px(11.0))
@@ -1393,19 +1601,27 @@ impl Render for ArcadeShell {
                                                     .child(
                                                         div()
                                                             .text_size(px(11.5))
-                                                            .font_weight(if is_active {
+                                                            .font_weight(if is_active || is_dir {
                                                                 gpui::FontWeight::MEDIUM
                                                             } else {
                                                                 gpui::FontWeight::NORMAL
                                                             })
                                                             .overflow_hidden()
-                                                            .child(display_name),
+                                                            .child(item.name),
                                                     )
                                             }).collect();
 
-                                            el.children(file_nodes)
+                                            el.child(
+                                                div()
+                                                    .id("sidebar-tree-scroll")
+                                                    .flex_1()
+                                                    .flex()
+                                                    .flex_col()
+                                                    .overflow_y_scroll()
+                                                    .children(tree_nodes),
+                                            )
                                         })
-                                        .when(self.workspace_files.is_empty(), |el| {
+                                        .when(self.workspace_root.is_none(), |el| {
                                             el.child(
                                                 div()
                                                     .flex()
@@ -1557,7 +1773,12 @@ impl Render for ArcadeShell {
                                         &self.selections,
                                         &active_filename,
                                         &self.highlight_spans,
-                                    )),
+                                        &self.find_replace.matches,
+                                        self.find_replace.current_match(),
+                                    ))
+                                    .when(self.find_replace.is_open, |p| {
+                                        p.child(render_find_replace_bar(&theme, &self.find_replace, cx))
+                                    }),
                             )
                             .when(show_terminal, |p| {
                                 p.child(
@@ -1951,5 +2172,67 @@ mod tests {
             assert!(path.exists());
             assert!(path.to_string_lossy().contains("ir"));
         }
+    }
+
+    #[test]
+    fn finds_and_replaces_occurrences_in_document() {
+        let mut shell = ArcadeShell::test_stub();
+        shell.document = Document::new("apple banana apple cherry apple");
+        shell.sync_to_active_tab();
+
+        // 1. Open Find bar
+        shell.open_find();
+        assert!(shell.find_replace.is_open);
+
+        // 2. Set query and compute matches
+        shell.find_replace.query = "apple".to_string();
+        shell.find_replace.update_matches(shell.document.rope());
+        assert_eq!(shell.find_replace.matches.len(), 3);
+
+        // 3. Navigation cycling
+        shell.find_next_match();
+        assert_eq!(shell.find_replace.active_match_index, 1);
+        shell.find_prev_match();
+        assert_eq!(shell.find_replace.active_match_index, 0);
+
+        // 4. Select all matches as multi-cursors
+        shell.select_all_find_matches();
+        assert_eq!(shell.selections.len(), 3);
+
+        // 5. Replace current match
+        shell.find_replace.replacement = "orange".to_string();
+        shell.replace_current_find_match();
+        assert!(shell.document.to_string().starts_with("orange banana"));
+        assert_eq!(shell.find_replace.matches.len(), 2);
+
+        // 6. Replace all remaining matches
+        shell.replace_all_find_matches();
+        assert_eq!(shell.document.to_string(), "orange banana orange cherry orange");
+        assert_eq!(shell.find_replace.matches.len(), 0);
+
+        // 7. Close find bar
+        shell.close_find();
+        assert!(!shell.find_replace.is_open);
+    }
+
+    #[test]
+    fn expands_and_navigates_directory_tree() {
+        let mut shell = ArcadeShell::test_stub();
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        shell.open_folder(manifest_dir.clone());
+
+        assert_eq!(shell.workspace_root, Some(manifest_dir.clone()));
+        assert!(shell.expanded_folders.contains(&manifest_dir));
+
+        let src_dir = manifest_dir.join("src");
+        assert!(!shell.expanded_folders.contains(&src_dir));
+
+        // Toggle expand src_dir
+        shell.toggle_folder_expansion(src_dir.clone());
+        assert!(shell.expanded_folders.contains(&src_dir));
+
+        // Toggle collapse src_dir
+        shell.toggle_folder_expansion(src_dir.clone());
+        assert!(!shell.expanded_folders.contains(&src_dir));
     }
 }

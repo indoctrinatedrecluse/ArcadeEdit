@@ -457,7 +457,7 @@ fn render_about_content(theme: &SolarizedTheme) -> Div {
                                         .border_color(theme.syntax_cyan)
                                         .text_size(px(10.5))
                                         .text_color(theme.syntax_cyan)
-                                        .child("v1.1.0"),
+                                        .child(format!("v{}", env!("CARGO_PKG_VERSION"))),
                                 ),
                         )
                         .child(

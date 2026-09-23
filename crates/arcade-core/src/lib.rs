@@ -9,7 +9,7 @@ pub mod search;
 pub mod selection;
 
 use std::cmp::min;
-use ropey::Rope;
+pub use ropey::Rope;
 
 pub use history::{History, Transaction};
 pub use io::{has_external_change, load_from_file, save_to_file, FileMetadata, PersistenceError};

@@ -70,6 +70,20 @@ pub fn default_commands() -> Vec<CommandItem> {
             false,
         ),
         CommandItem::new(
+            "EDIT",
+            "Find in Document",
+            "Search for text occurrences across the document",
+            Some("Ctrl+F"),
+            false,
+        ),
+        CommandItem::new(
+            "EDIT",
+            "Replace in Document",
+            "Search and replace occurrences across the document",
+            Some("Ctrl+H"),
+            false,
+        ),
+        CommandItem::new(
             "VIEW",
             "Toggle Workspace File Explorer",
             "Show or hide the workspace navigation pane",

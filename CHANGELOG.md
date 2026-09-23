@@ -49,6 +49,30 @@ ArcadeEdit v1.1.0 introduces an integrated terminal surface, native companion ut
 
 ---
 
+### 🔍 Interactive Find & Replace Bar (`arcade-ui::find_replace`)
+
+- **Floating Glass Toolbar (`Ctrl+F` / `Ctrl+H`)**:
+  - Integrated in-editor Find (`Ctrl+F`) and Find & Replace (`Ctrl+H`) floating glass toolbar styled with Solarized acrylic sheen.
+  - Live query matching with occurrence counter (`1 of 12`, `0 of 0`, or `No matches`).
+  - Next match (`↓` / `Enter`) and previous match (`↑` / `Shift+Enter`) navigation with wrap-around.
+  - Multi-cursor **`[All]`** action: selects all matching occurrences across the document simultaneously as multi-cursors!
+  - Case-sensitivity toggle button (`[Aa]`).
+  - Single replace (`[Replace]`) and Replace All (**`[All]`**) actions with atomic undo/redo history.
+  - Live visual occurrence highlighting in the gutter and across matching lines in the editor code surface.
+
+---
+
+### 🌳 Expandable Workspace Directory Tree (`arcade-ui::tree_view`)
+
+- **Hierarchical Directory Tree**:
+  - Replaced the flat file list with an expandable, collapsible virtualized tree structure (`tree_view::build_visible_tree`).
+  - Interactive folder expansion toggles (`▸ 📁` collapsed, `▾ 📂` expanded) with indentation proportional to directory depth.
+  - Automatically expands ancestor directories when files are opened.
+  - Dedicated smooth scrolling container (`.id("sidebar-tree-scroll").overflow_y_scroll()`) for effortless navigation of large source trees.
+  - Preserved filetype badges (`🦀`, `📄`, `⚙️`, `🔒`, `📝`) with click-to-open handlers opening files into dedicated editor tabs.
+
+---
+
 ### 📑 Multi-Tab Editor & Document Workspace (`arcade-ui::tabs`)
 
 - **Full Multi-Tab Architecture**:
