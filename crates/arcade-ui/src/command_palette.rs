@@ -248,6 +248,7 @@ pub fn render_command_palette(
 
     let command_list_element = if command_items.is_empty() {
         div()
+            .id("command-palette-empty")
             .py_6()
             .px_4()
             .flex()
@@ -269,6 +270,9 @@ pub fn render_command_palette(
             )
     } else {
         div()
+            .id("command-palette-scroll")
+            .max_h(px(380.0))
+            .overflow_y_scroll()
             .p_2()
             .flex()
             .flex_col()

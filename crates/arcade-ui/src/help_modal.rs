@@ -229,9 +229,10 @@ pub fn render_help_modal(
                 // =============================================================
                 .child(
                     div()
+                        .id("help-modal-body-scroll")
                         .flex_1()
                         .p_5()
-                        .overflow_hidden()
+                        .overflow_y_scroll()
                         .flex()
                         .flex_col()
                         .child(match section {
@@ -593,7 +594,6 @@ fn render_shortcuts_content(theme: &SolarizedTheme) -> Div {
         .flex()
         .flex_col()
         .gap_2()
-        .overflow_hidden()
         .children(rows)
 }
 

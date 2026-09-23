@@ -440,6 +440,65 @@ impl ArcadeShell {
     }
 }
 
+/// Helper to extract printable input character from GPUI KeyDownEvent,
+/// correctly resolving space, hyphens, shifted symbols, and platform IME chars.
+pub fn resolve_input_character(event: &gpui::KeyDownEvent) -> Option<String> {
+    let ctrl = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
+    if ctrl {
+        return None;
+    }
+
+    let key = event.keystroke.key.as_str();
+    let shift = event.keystroke.modifiers.shift;
+
+    // 1. Direct mappings for non-character key names emitted by GPUI
+    match key {
+        "space" => return Some(" ".to_string()),
+        "minus" | "hyphen" => return Some(if shift { "_".to_string() } else { "-".to_string() }),
+        "equal" | "equals" => return Some(if shift { "+".to_string() } else { "=".to_string() }),
+        "comma" => return Some(if shift { "<".to_string() } else { ",".to_string() }),
+        "period" => return Some(if shift { ">".to_string() } else { ".".to_string() }),
+        "slash" => return Some(if shift { "?".to_string() } else { "/".to_string() }),
+        "backslash" => return Some(if shift { "|".to_string() } else { "\\".to_string() }),
+        "semicolon" => return Some(if shift { ":".to_string() } else { ";".to_string() }),
+        "quote" => return Some(if shift { "\"".to_string() } else { "'".to_string() }),
+        "backquote" | "grave" => return Some(if shift { "~".to_string() } else { "`".to_string() }),
+        "bracketleft" => return Some(if shift { "{".to_string() } else { "[".to_string() }),
+        "bracketright" => return Some(if shift { "}".to_string() } else { "]".to_string() }),
+        // Number row symbols with Shift
+        "1" if shift => return Some("!".to_string()),
+        "2" if shift => return Some("@".to_string()),
+        "3" if shift => return Some("#".to_string()),
+        "4" if shift => return Some("$".to_string()),
+        "5" if shift => return Some("%".to_string()),
+        "6" if shift => return Some("^".to_string()),
+        "7" if shift => return Some("&".to_string()),
+        "8" if shift => return Some("*".to_string()),
+        "9" if shift => return Some("(".to_string()),
+        "0" if shift => return Some(")".to_string()),
+        _ => {}
+    }
+
+    // 2. If GPUI provided a resolved key_char from the platform/IME, use it
+    if let Some(ch) = &event.keystroke.key_char {
+        if !ch.is_empty() && !ch.chars().all(|c| c.is_control()) {
+            return Some(ch.clone());
+        }
+    }
+
+    // 3. Fallback for simple single character keys without Alt
+    if !event.keystroke.modifiers.alt && key.chars().count() == 1 {
+        let ch = if shift {
+            key.to_uppercase()
+        } else {
+            key.to_string()
+        };
+        return Some(ch);
+    }
+
+    None
+}
+
 impl Render for ArcadeShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if let Some(worker) = &self.highlight_worker {
@@ -540,7 +599,6 @@ impl Render for ArcadeShell {
                     }
                     return;
                 }
-
                 // When Command Palette is visible, keyboard routes to palette navigation and search:
                 if this.show_command_palette {
                     if ctrl && key == "p" {
@@ -575,8 +633,8 @@ impl Render for ArcadeShell {
                         return;
                     }
                     // Character typing into palette search
-                    if !ctrl && !event.keystroke.modifiers.alt && key.chars().count() == 1 {
-                        this.command_query.push_str(key);
+                    if let Some(ch) = resolve_input_character(event) {
+                        this.command_query.push_str(&ch);
                         this.filter_commands();
                         cx.notify();
                         return;
@@ -610,7 +668,8 @@ impl Render for ArcadeShell {
                         cx.notify();
                         return;
                     }
-                    if this.terminal.handle_key(key, ctrl) {
+                    let typed_char = resolve_input_character(event);
+                    if this.terminal.handle_key(key, ctrl, typed_char.as_deref()) {
                         cx.notify();
                         return;
                     }
@@ -732,8 +791,8 @@ impl Render for ArcadeShell {
                 }
 
                 // Text Insertion (Printable characters without Control/Alt)
-                if !ctrl && !event.keystroke.modifiers.alt && key.chars().count() == 1 {
-                    this.insert_text(key);
+                if let Some(ch) = resolve_input_character(event) {
+                    this.insert_text(&ch);
                     cx.notify();
                 }
             }))
@@ -1679,16 +1738,22 @@ mod tests {
         assert!(terminal.lines.iter().any(|l| l.text.contains("ArcadeEdit Integrated Terminal")));
 
         // Typing into input buffer
-        assert!(terminal.handle_key("h", false));
-        assert!(terminal.handle_key("i", false));
+        assert!(terminal.handle_key("h", false, None));
+        assert!(terminal.handle_key("i", false, None));
         assert_eq!(terminal.input_buffer, "hi");
 
+        // Typing space and hyphen directly and via character strings
+        assert!(terminal.handle_key("space", false, None));
+        assert!(terminal.handle_key("minus", false, None));
+        assert!(terminal.handle_key("v", false, Some("v")));
+        assert_eq!(terminal.input_buffer, "hi -v");
+
         // Backspace
-        assert!(terminal.handle_key("backspace", false));
-        assert_eq!(terminal.input_buffer, "h");
+        assert!(terminal.handle_key("backspace", false, None));
+        assert_eq!(terminal.input_buffer, "hi -");
 
         // Ctrl+C to abort line
-        assert!(terminal.handle_key("c", true));
+        assert!(terminal.handle_key("c", true, None));
         assert!(terminal.input_buffer.is_empty());
 
         // Echo command

@@ -9,6 +9,12 @@ use gpui::{div, prelude::*, px, Context, IntoElement};
 use std::path::PathBuf;
 use std::process::Command;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// Classification of a line inside the terminal output stream.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TerminalLineKind {
@@ -239,11 +245,25 @@ impl TerminalState {
         let result = if is_ir_call {
             let ir_binary = self.ir_path.clone().or_else(resolve_ir_binary);
             if let Some(bin_path) = ir_binary {
+                if self.ir_path.is_none() {
+                    self.ir_path = Some(bin_path.clone());
+                }
                 let args = &tokens[1..];
-                Command::new(&bin_path)
-                    .args(args)
-                    .current_dir(&self.working_dir)
-                    .output()
+                #[cfg(windows)]
+                {
+                    Command::new(&bin_path)
+                        .args(args)
+                        .current_dir(&self.working_dir)
+                        .creation_flags(CREATE_NO_WINDOW)
+                        .output()
+                }
+                #[cfg(not(windows))]
+                {
+                    Command::new(&bin_path)
+                        .args(args)
+                        .current_dir(&self.working_dir)
+                        .output()
+                }
             } else {
                 self.lines.push(TerminalLine::new(
                     TerminalLineKind::Error,
@@ -258,6 +278,7 @@ impl TerminalState {
                 Command::new("cmd")
                     .args(["/C", cmd])
                     .current_dir(&self.working_dir)
+                    .creation_flags(CREATE_NO_WINDOW)
                     .output()
             }
             #[cfg(not(windows))]
@@ -300,7 +321,7 @@ impl TerminalState {
     }
 
     /// Handles keyboard input routed to the terminal prompt. Returns true if handled.
-    pub fn handle_key(&mut self, key: &str, ctrl: bool) -> bool {
+    pub fn handle_key(&mut self, key: &str, ctrl: bool, char_input: Option<&str>) -> bool {
         if key == "enter" {
             let to_run = self.input_buffer.clone();
             self.execute_command(&to_run);
@@ -332,6 +353,22 @@ impl TerminalState {
             return true;
         }
 
+        if let Some(ch) = char_input {
+            self.input_buffer.push_str(ch);
+            return true;
+        }
+
+        // Direct fallbacks for named keys when char_input was not provided
+        if key == "space" {
+            self.input_buffer.push(' ');
+            return true;
+        }
+
+        if key == "minus" || key == "hyphen" {
+            self.input_buffer.push('-');
+            return true;
+        }
+
         if !ctrl && key.chars().count() == 1 {
             self.input_buffer.push_str(key);
             return true;
@@ -355,12 +392,12 @@ pub fn render_terminal_panel(
 
     let is_ir_resolved = terminal.ir_path.is_some();
 
-    // Render up to the last 150 terminal output lines
+    // Render up to the last 500 terminal output lines
     let rendered_lines: Vec<_> = terminal
         .lines
         .iter()
         .rev()
-        .take(150)
+        .take(500)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
@@ -383,7 +420,7 @@ pub fn render_terminal_panel(
         .collect();
 
     div()
-        .h(px(250.0))
+        .h(px(260.0))
         .w_full()
         .bg(theme.bg_canvas)
         .border_t_1()
@@ -544,12 +581,12 @@ pub fn render_terminal_panel(
         // =====================================================================
         .child(
             div()
+                .id("terminal-output-scroll")
                 .flex_1()
                 .p_3()
-                .overflow_hidden()
+                .overflow_y_scroll()
                 .flex()
                 .flex_col()
-                .justify_end()
                 .gap_0p5()
                 .children(rendered_lines),
         )
