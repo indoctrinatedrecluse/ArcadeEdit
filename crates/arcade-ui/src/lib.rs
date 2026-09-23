@@ -6,6 +6,8 @@
 
 pub mod command_palette;
 pub mod editor_view;
+pub mod help_modal;
+pub mod terminal;
 pub mod theme;
 
 use std::path::PathBuf;
@@ -16,6 +18,8 @@ use arcade_language::{HighlightSpan, HighlightWorker, LanguageId, LanguageServic
 use command_palette::{default_commands, render_command_palette, CommandItem};
 use editor_view::render_live_editor_surface;
 use gpui::{div, prelude::*, px, Context, FocusHandle, IntoElement, Render, Window};
+use help_modal::{render_help_modal, HelpSection};
+use terminal::{render_terminal_panel, TerminalLine, TerminalLineKind, TerminalState};
 use theme::SolarizedTheme;
 
 /// Identifies the custom visual system used by the desktop application.
@@ -57,6 +61,16 @@ pub struct ArcadeShell {
     pub workspace_root: Option<PathBuf>,
     /// Files discovered in the opened workspace folder.
     pub workspace_files: Vec<PathBuf>,
+    /// Integrated terminal session state.
+    pub terminal: TerminalState,
+    /// Controls visibility of the bottom integrated terminal panel.
+    pub show_terminal: bool,
+    /// Whether terminal currently has active keyboard focus.
+    pub terminal_focused: bool,
+    /// Controls visibility of the in-app Help and Documentation modal.
+    pub show_help_modal: bool,
+    /// The active tab / section inside the Help modal.
+    pub active_help_section: HelpSection,
 }
 
 impl ArcadeShell {
@@ -72,6 +86,8 @@ impl ArcadeShell {
         }
 
         let worker = HighlightWorker::spawn().ok();
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let terminal = TerminalState::new(working_dir);
 
         Self {
             document: Document::new(initial_text),
@@ -91,6 +107,11 @@ impl ArcadeShell {
             current_file_path: None,
             workspace_root: None,
             workspace_files: Vec::new(),
+            terminal,
+            show_terminal: false,
+            terminal_focused: false,
+            show_help_modal: false,
+            active_help_section: HelpSection::IrDocs,
         }
     }
 
@@ -114,6 +135,11 @@ impl ArcadeShell {
             current_file_path: None,
             workspace_root: None,
             workspace_files: Vec::new(),
+            terminal: TerminalState::new(PathBuf::from(".")),
+            show_terminal: false,
+            terminal_focused: false,
+            show_help_modal: false,
+            active_help_section: HelpSection::IrDocs,
         }
     }
 
@@ -188,6 +214,7 @@ impl ArcadeShell {
         let files = arcade_workspace::discover_files(&[&path]);
         self.workspace_root = Some(path.clone());
         self.workspace_files = files;
+        self.terminal.working_dir = path.clone();
         self.show_sidebar = true;
 
         if let Some(preferred) = self
@@ -320,13 +347,37 @@ impl ArcadeShell {
                 self.toggle_sidebar();
             }
             "Arcade Headless: Preview Edits" => {
-                self.insert_text("\n// [Arcade Headless Preview: dry-run passed with 0 errors]\n");
+                let byte_size = self.document.len_bytes();
+                let char_count = self.document.rope().len_chars();
+                let line_count = self.document.rope().len_lines();
+                let preview_msg = format!(
+                    "\n// [Arcade Headless Preview: {} bytes, {} chars, {} lines, rev: {:?} - 0 errors]\n",
+                    byte_size, char_count, line_count, self.document.revision()
+                );
+                self.insert_text(&preview_msg);
+                self.terminal.lines.push(TerminalLine::new(
+                    TerminalLineKind::Info,
+                    format!("Headless Inspection: {} bytes, {} lines (Revision {:?})", byte_size, line_count, self.document.revision()),
+                ));
             }
             "Open Integrated Terminal with `ir`" => {
-                self.select_tab(1);
+                self.show_terminal = true;
+                self.terminal_focused = true;
             }
             "Toggle Solarized Sheen Contrast" => {
                 self.toggle_theme();
+            }
+            "ir Documentation" => {
+                self.active_help_section = HelpSection::IrDocs;
+                self.show_help_modal = true;
+            }
+            "About ArcadeEdit" => {
+                self.active_help_section = HelpSection::About;
+                self.show_help_modal = true;
+            }
+            "Help: Keyboard Shortcuts" => {
+                self.active_help_section = HelpSection::Shortcuts;
+                self.show_help_modal = true;
             }
             _ => {}
         }
@@ -410,6 +461,9 @@ impl Render for ArcadeShell {
         let is_dark_theme = self.is_dark_theme;
         let show_palette = self.show_command_palette;
         let show_sidebar = self.show_sidebar;
+        let show_terminal = self.show_terminal;
+        let show_help_modal = self.show_help_modal;
+        let active_help_section = self.active_help_section;
         let query = &self.command_query;
         let commands = &self.commands;
         let active_tab = self.active_tab;
@@ -477,6 +531,16 @@ impl Render for ArcadeShell {
                 let ctrl = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
                 let shift = event.keystroke.modifiers.shift;
 
+                // When Help modal is visible, Escape dismisses it:
+                if this.show_help_modal {
+                    if key == "escape" {
+                        this.show_help_modal = false;
+                        cx.notify();
+                        return;
+                    }
+                    return;
+                }
+
                 // When Command Palette is visible, keyboard routes to palette navigation and search:
                 if this.show_command_palette {
                     if ctrl && key == "p" {
@@ -518,6 +582,38 @@ impl Render for ArcadeShell {
                         return;
                     }
                     // Absorb any other keys while palette is open
+                    return;
+                }
+
+                // Help Menu Shortcut (F1)
+                if key == "f1" {
+                    this.show_help_modal = true;
+                    this.active_help_section = HelpSection::IrDocs;
+                    cx.notify();
+                    return;
+                }
+
+                // Toggle Integrated Terminal (Ctrl+` or Ctrl+~)
+                if ctrl && (key == "`" || key == "~") {
+                    this.show_terminal = !this.show_terminal;
+                    if this.show_terminal {
+                        this.terminal_focused = true;
+                    }
+                    cx.notify();
+                    return;
+                }
+
+                // When Terminal is open and focused, route keys to terminal session
+                if this.show_terminal && this.terminal_focused {
+                    if key == "escape" {
+                        this.terminal_focused = false;
+                        cx.notify();
+                        return;
+                    }
+                    if this.terminal.handle_key(key, ctrl) {
+                        cx.notify();
+                        return;
+                    }
                     return;
                 }
 
@@ -699,6 +795,25 @@ impl Render for ArcadeShell {
                                         cx.notify();
                                     }))
                                     .child(if is_dark_theme { "SOLARIZED DARK" } else { "SOLARIZED LIGHT" }),
+                            )
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded_md()
+                                    .bg(theme.badge_bg)
+                                    .border_1()
+                                    .border_color(theme.border_subtle)
+                                    .text_size(px(10.0))
+                                    .text_color(theme.syntax_green)
+                                    .cursor_pointer()
+                                    .hover(|s| s.bg(theme.bg_hover_glass))
+                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                        this.show_help_modal = true;
+                                        this.active_help_section = HelpSection::IrDocs;
+                                        cx.notify();
+                                    }))
+                                    .child("HELP ▾"),
                             ),
                     )
                     // Center Command Palette & Search Trigger (macOS/MAUI Pill)
@@ -861,7 +976,7 @@ impl Render for ArcadeShell {
                                     .child("×"),
                             ),
                     )
-                    // Inactive Tab 1 (Welcome.md) - Index 1
+                    // Tab 1 (Terminal ir) - Index 1
                     .child(
                         div()
                             .flex()
@@ -870,45 +985,46 @@ impl Render for ArcadeShell {
                             .px_3()
                             .py_1p5()
                             .rounded_t_lg()
-                            .bg(if active_tab == 1 {
+                            .bg(if active_tab == 1 || self.show_terminal {
                                 theme.bg_surface_glass
                             } else {
                                 theme.bg_canvas
                             })
                             .border_1()
-                            .border_color(if active_tab == 1 {
+                            .border_color(if active_tab == 1 || self.show_terminal {
                                 theme.border_glass
                             } else {
                                 gpui::rgba(0x00000000)
                             })
                             .border_b_0()
                             .border_t_2()
-                            .border_color(if active_tab == 1 {
-                                theme.syntax_blue
+                            .border_color(if active_tab == 1 || self.show_terminal {
+                                theme.syntax_green
                             } else {
                                 gpui::rgba(0x00000000)
                             })
                             .cursor_pointer()
                             .hover(|s| s.bg(theme.bg_hover_glass))
                             .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                this.select_tab(1);
+                                this.show_terminal = true;
+                                this.terminal_focused = true;
                                 cx.notify();
                             }))
                             .child(
                                 div()
-                                    .text_color(theme.syntax_blue)
+                                    .text_color(theme.syntax_green)
                                     .text_size(px(12.0))
-                                    .child("📄"),
+                                    .child("📟"),
                             )
                             .child(
                                 div()
                                     .text_size(px(12.0))
-                                    .text_color(if active_tab == 1 {
+                                    .text_color(if self.show_terminal {
                                         theme.text_bright
                                     } else {
                                         theme.text_secondary
                                     })
-                                    .child("Welcome.md"),
+                                    .child("Terminal (ir)"),
                             )
                             .child(
                                 div()
@@ -919,7 +1035,8 @@ impl Render for ArcadeShell {
                                     .cursor_pointer()
                                     .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
                                         cx.stop_propagation();
-                                        this.select_tab(0);
+                                        this.show_terminal = false;
+                                        this.terminal_focused = false;
                                         cx.notify();
                                     }))
                                     .child("×"),
@@ -1283,14 +1400,41 @@ impl Render for ArcadeShell {
                                 ),
                         )
                     })
-                    // Live Interactive Editor Canvas Surface with Tree-Sitter Highlighting
-                    .child(render_live_editor_surface(
-                        &theme,
-                        &self.document,
-                        &self.selections,
-                        &active_filename,
-                        &self.highlight_spans,
-                    ))
+                    // Main Editor + Integrated Terminal Area
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_1()
+                            .relative()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .flex()
+                                    .relative()
+                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                        this.terminal_focused = false;
+                                        cx.notify();
+                                    }))
+                                    .child(render_live_editor_surface(
+                                        &theme,
+                                        &self.document,
+                                        &self.selections,
+                                        &active_filename,
+                                        &self.highlight_spans,
+                                    )),
+                            )
+                            .when(show_terminal, |p| {
+                                p.child(
+                                    div()
+                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                            this.terminal_focused = true;
+                                            cx.notify();
+                                        }))
+                                        .child(render_terminal_panel(&theme, &self.terminal, cx)),
+                                )
+                            }),
+                    )
             )
             // =================================================================
             // 4. STATUS BAR (Minimalist Glassy Bottom Strip)
@@ -1376,6 +1520,12 @@ impl Render for ArcadeShell {
             // =================================================================
             .when(show_palette, |parent| {
                 parent.child(render_command_palette(&theme, query, commands, cx))
+            })
+            // =================================================================
+            // 6. IN-APP HELP & DOCUMENTATION MODAL OVERLAY
+            // =================================================================
+            .when(show_help_modal, |parent| {
+                parent.child(render_help_modal(active_help_section, &theme, cx))
             })
     }
 }
@@ -1520,5 +1670,92 @@ mod tests {
         assert!(shell.workspace_files.iter().any(|f| f.ends_with("Cargo.toml")));
         assert!(shell.show_sidebar);
         assert!(shell.current_file_path.is_some());
+    }
+
+    #[test]
+    fn manages_integrated_terminal_lifecycle_and_commands() {
+        let mut terminal = TerminalState::new(PathBuf::from("."));
+        assert!(!terminal.lines.is_empty());
+        assert!(terminal.lines.iter().any(|l| l.text.contains("ArcadeEdit Integrated Terminal")));
+
+        // Typing into input buffer
+        assert!(terminal.handle_key("h", false));
+        assert!(terminal.handle_key("i", false));
+        assert_eq!(terminal.input_buffer, "hi");
+
+        // Backspace
+        assert!(terminal.handle_key("backspace", false));
+        assert_eq!(terminal.input_buffer, "h");
+
+        // Ctrl+C to abort line
+        assert!(terminal.handle_key("c", true));
+        assert!(terminal.input_buffer.is_empty());
+
+        // Echo command
+        terminal.execute_command("echo arcade_term_test");
+        assert!(terminal.lines.iter().any(|l| l.text.contains("arcade_term_test")));
+
+        // Clear command
+        terminal.execute_command("clear");
+        assert!(terminal.lines.is_empty());
+    }
+
+    #[test]
+    fn routes_palette_commands_to_terminal_and_help_modal() {
+        let mut shell = ArcadeShell::test_stub();
+
+        // 1. Open Terminal via palette command
+        let term_idx = shell
+            .commands
+            .iter()
+            .position(|c| c.title == "Open Integrated Terminal with `ir`")
+            .expect("Command missing");
+        shell.execute_command_at(term_idx);
+        assert!(shell.show_terminal);
+        assert!(shell.terminal_focused);
+
+        // 2. Open ir Documentation via palette command
+        let ir_idx = shell
+            .commands
+            .iter()
+            .position(|c| c.title == "ir Documentation")
+            .expect("Command missing");
+        shell.execute_command_at(ir_idx);
+        assert!(shell.show_help_modal);
+        assert_eq!(shell.active_help_section, HelpSection::IrDocs);
+
+        // 3. Open About section
+        let about_idx = shell
+            .commands
+            .iter()
+            .position(|c| c.title == "About ArcadeEdit")
+            .expect("Command missing");
+        shell.execute_command_at(about_idx);
+        assert!(shell.show_help_modal);
+        assert_eq!(shell.active_help_section, HelpSection::About);
+
+        // 4. Headless preview command
+        let prev_idx = shell
+            .commands
+            .iter()
+            .position(|c| c.title == "Arcade Headless: Preview Edits")
+            .expect("Command missing");
+        shell.execute_command_at(prev_idx);
+        assert!(shell.document.to_string().contains("[Arcade Headless Preview:"));
+        assert!(shell.terminal.lines.iter().any(|l| l.text.contains("Headless Inspection:")));
+    }
+
+    #[test]
+    fn resolves_bundled_ir_binary() {
+        let resolved = terminal::resolve_ir_binary();
+        if cfg!(windows) {
+            assert!(resolved.is_some(), "Bundled ir binary should be resolved in development/workspace on Windows");
+            let path = resolved.unwrap();
+            assert!(path.exists());
+            assert!(path.to_string_lossy().contains("ir"));
+        } else if let Some(path) = resolved {
+            assert!(path.exists());
+            assert!(path.to_string_lossy().contains("ir"));
+        }
     }
 }

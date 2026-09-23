@@ -41,14 +41,20 @@ jobs:
           cargo build --release --target ${{ matrix.target }} -p arcade-desktop -p arcade-headless
           Copy-Item target/${{ matrix.target }}/release/arcade-desktop.exe .
           Copy-Item target/${{ matrix.target }}/release/arcade-headless.exe .
-          Compress-Archive -Path arcade-desktop.exe, arcade-headless.exe, README.md, CHANGELOG.md -DestinationPath ${{ matrix.artifact_name }}
+          Invoke-WebRequest -Uri "https://github.com/indoctrinatedrecluse/ir-cli-utility/releases/download/v3.8/ir-windows.zip" -OutFile "ir-windows.zip"
+          Expand-Archive -Path "ir-windows.zip" -DestinationPath "ir_dist" -Force
+          Copy-Item "ir_dist/bin/ir.exe" .
+          Compress-Archive -Path arcade-desktop.exe, arcade-headless.exe, ir.exe, README.md, CHANGELOG.md -DestinationPath ${{ matrix.artifact_name }}
 
       - name: Build Linux binary (Headless CLI)
         if: matrix.mode == 'headless-only'
         run: |
           cargo build --release --target ${{ matrix.target }} -p arcade-headless
           cp target/${{ matrix.target }}/release/arcade-headless .
-          tar -czf ${{ matrix.artifact_name }} arcade-headless README.md CHANGELOG.md
+          curl -sL "https://github.com/indoctrinatedrecluse/ir-cli-utility/releases/download/v3.8/ir-linux.tar.gz" -o "ir-linux.tar.gz"
+          mkdir -p ir_dist && tar -xzf ir-linux.tar.gz -C ir_dist
+          cp ir_dist/bin/ir . || cp ir_dist/ir . || true
+          tar -czf ${{ matrix.artifact_name }} arcade-headless ir README.md CHANGELOG.md
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

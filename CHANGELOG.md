@@ -57,6 +57,38 @@ ArcadeEdit v1.0.0 marks the first usable proof-of-concept release featuring a cu
 
 ---
 
+### 📟 Integrated Terminal & Bundled `ir` CLI Utility (`arcade-ui::terminal`)
+
+- **Interactive Bottom Terminal Panel**:
+  - Docked console surface at the bottom of the workspace with Solarized canvas styling and specular top-edge sheen reflection.
+  - Active prompt (`ir ❯ `) supporting command execution, command history cycling (`↑`/`↓`), `Backspace`, `Ctrl+C` (abort), and `Ctrl+L` (clear).
+  - Quick action toolbar buttons: `[ir help]`, `[ir list]`, `[Clear]`, and `[✕]` (close panel).
+  - Dedicated tab header `📟 Terminal (ir)` with click-to-focus and close actions.
+  - Keyboard toggle via `Ctrl+\`` or Command Palette.
+- **Native Self-Resolution of Bundled `ir`**:
+  - Automatically resolves `ir` commands (`ir ...`) directly to the bundled executable (`bin/ir.exe`, application sibling, `C:\ir\ir.exe`, or standard locations) without requiring users to configure system `PATH`.
+  - Dispatches standard shell commands directly within the active workspace working directory.
+- **Bundled Companion Distribution**:
+  - Packaged pure-Rust `ir` CLI utility (release v3.8 from `indoctrinatedrecluse/ir-cli-utility`) directly into ArcadeEdit release artifacts and local development trees.
+
+---
+
+### 📖 In-App Help & Documentation Modal (`arcade-ui::help_modal`)
+
+- **Translucent Acrylic Help Modal**:
+  - Accessible via titlebar **`[HELP ▾]`** button, keyboard shortcut `F1`, or Command Palette.
+  - Outside backdrop click-to-dismiss and `Escape` key navigation.
+- **Dedicated "ir documentation" Section**:
+  - Comprehensive command reference and usage guide covering file manipulation (`list`, `create`, `remove`, `copy`, `move`), text inspection (`grep`, `sort`, `diff`), system utilities (`pmon`, `nettop`, `dua`, `fastfetch`), and web tools (`scrape`).
+  - Clear attribution to `indoctrinatedrecluse` with link to upstream repository.
+- **Dedicated "About" Section**:
+  - Displays App Name: `ArcadeEdit`, Version: `1.0.0`, Author: `indoctrinatedrecluse`.
+  - Detailed system architecture summary and core design principles.
+- **"Keyboard Shortcuts" Section**:
+  - Complete cheat sheet for all navigation, editing, terminal, and modal shortcuts.
+
+---
+
 ### 🧠 Core Editing Engine & Multi-Cursor Text Model (`arcade-core`)
 
 - **Multi-Cursor Selections (`selection.rs`)**:

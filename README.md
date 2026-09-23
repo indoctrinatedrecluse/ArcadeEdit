@@ -143,13 +143,15 @@ The built-in terminal will make `ir` immediately available as a companion workfl
 3. ✅ 🎨 Add the GPUI desktop shell, multi-cursor editing, and live Solarized Glass canvas.
 4. ✅ 🌳 Add Tree-sitter AST parsing/highlighting on background workers (`arcade-language`).
 5. ✅ ⚙️ Ship the first `arcade-headless` commands (`inspect`, `search`, `replace`) with versioned JSON protocol.
-6. ⏳ 🛠️ Add the integrated terminal and a versioned `ir` bundle/documentation pipeline.
+6. ✅ 🛠️ Add the integrated terminal and a versioned `ir` bundle/documentation pipeline.
 7. ⏳ 🐳 Package, benchmark, harden container behavior, and define huge-file limits.
 
 ## 🚧 Status (v1.0.0 Proof of Concept)
 
 **Interactive Desktop POC & Versioned Headless CLI Active.** The project currently features:
 - 🎨 **Solarized Glass GUI** (`arcade-desktop` / `arcade-ui`): A GPU-rendered desktop interface styled with a Solarized Dark minimalist palette, translucent acrylic glass sheen layers, macOS/MAUI-inspired floating command palette (`Ctrl+P`), live multi-cursor keyboard editing, vertical cursor glow, and dynamic language/revision status bar.
+- 📟 **Integrated Terminal & Bundled `ir` CLI** (`arcade-ui::terminal`): Dockable bottom terminal panel with command history, prompt execution, quick actions (`ir help`, `ir list`), and automatic self-resolution of the bundled `ir` executable without requiring PATH configuration.
+- 📖 **In-App Help & Documentation Modal** (`arcade-ui::help_modal`): Accessible via titlebar `[HELP ▾]` or `F1`, featuring full `ir` command reference documentation, keyboard shortcuts, and About section (`ArcadeEdit` v1.0.0 by `indoctrinatedrecluse`).
 - 🌳 **Tree-Sitter Background Syntax Worker** (`arcade-language`): Non-blocking AST-based parsing and query capture execution on a dedicated background worker thread (`tree-sitter = "0.25"` and `tree-sitter-rust = "0.24"`), with markdown scanner and UTF-8 safe line token resolution.
 - ⚙️ **Deterministic Headless CLI** (`arcade-headless`): A lightweight CLI core free of GPUI or display dependencies, communicating over `arcade-protocol` (v1) with `inspect`, `search`, and `replace` subcommands supporting `--json`, `--dry-run`, and `--check` modes.
 - 🧠 **Multi-Cursor Core Engine** (`arcade-core`): Ropey-backed document buffer with byte offsets, revision tracking, atomic transactions, bounded undo/redo history, atomic file persistence, and in-memory rope search.

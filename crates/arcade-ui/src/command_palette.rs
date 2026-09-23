@@ -97,6 +97,27 @@ pub fn default_commands() -> Vec<CommandItem> {
             Some("Ctrl+K Ctrl+T"),
             false,
         ),
+        CommandItem::new(
+            "HELP",
+            "ir Documentation",
+            "Browse reference manual for the bundled `ir` CLI companion utility",
+            Some("F1"),
+            false,
+        ),
+        CommandItem::new(
+            "HELP",
+            "About ArcadeEdit",
+            "View application version, author credits, and system architecture",
+            None,
+            false,
+        ),
+        CommandItem::new(
+            "HELP",
+            "Help: Keyboard Shortcuts",
+            "Cheat sheet for common editing and navigation shortcuts",
+            None,
+            false,
+        ),
     ]
 }
 

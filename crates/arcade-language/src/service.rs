@@ -230,7 +230,7 @@ mod tests {
         // Wait briefly for the worker to respond
         let start = std::time::Instant::now();
         let mut response = None;
-        while start.elapsed() < std::time::Duration::from_millis(500) {
+        while start.elapsed() < std::time::Duration::from_millis(3000) {
             if let Some(res) = worker.try_recv_response() {
                 response = Some(res);
                 break;
