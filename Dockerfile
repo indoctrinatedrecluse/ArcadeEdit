@@ -1,5 +1,5 @@
 # ==============================================================================
-# ArcadeEdit Containerized Runtime & Headless Automation Host (v1.2.0)
+# ArcadeEdit Containerized Runtime & Headless Automation Host (v1.2.1)
 # Multi-stage build providing headless file inspection, search/replace,
 # and integrated companion CLI tooling (ir v3.8) inside Docker / Linux containers.
 # ==============================================================================

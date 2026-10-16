@@ -166,7 +166,7 @@ impl TerminalState {
 
         lines.push(TerminalLine::new(
             TerminalLineKind::Info,
-            "✦ ArcadeEdit Integrated Terminal (v1.2.0)",
+            format!("✦ ArcadeEdit Integrated Terminal (v{})", env!("CARGO_PKG_VERSION")),
         ));
         lines.push(TerminalLine::new(
             TerminalLineKind::Info,

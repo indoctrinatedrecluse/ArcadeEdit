@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.1] - 2026-10-16
+
+### 🎨 TUI Rendering Engine Overhaul, Dynamic Terminal Drawer, and Multi-Cursor Forward Deletion
+
+ArcadeEdit v1.2.1 brings a complete overhaul of the virtual terminal screen grid for high-fidelity TUI rendering, expandable terminal drawer geometry, continuous frame polling for active PTY sessions, forward deletion across multi-cursor selections, mouse click cursor placement and gutter line selections, and standard keyboard shortcut workflows.
+
+---
+
+### 📟 Terminal 2D Screen Grid & TUI Enhancements (`arcade-ui::terminal`)
+
+- **256-Color & 24-Bit Truecolor RGB Color Support**:
+  - Implemented `ansi_256_to_rgba` for full 6×6×6 color cube (`16`..=`231`) and 24 grayscale steps (`232`..=`255`) on both foreground (`38;5;n`) and background (`48;5;n`).
+  - Added 24-bit Truecolor RGB parsing (`38;2;r;g;b` and `48;2;r;g;b`).
+- **Reverse Video / Inverse Styling (`\x1b[7m` / `\x1b[27m`)**:
+  - Implemented inverse cell rendering (`reverse: bool`), swapping foreground and background colors for highlighted rows, status bars, and selection tables in interactive TUI tools (`ir pmon`, `ir nettop`, `dua`, `top`, `vim`).
+- **Underline & High-Intensity Backgrounds**:
+  - Added text decoration underlines (`\x1b[4m` / `\x1b[24m`) and high-intensity background codes (`100`..=`107`).
+- **DEC Private Mode & Cursor Tracking**:
+  - Added DEC Private Mode parsing for cursor visibility (`\x1b[?25h` / `\x1b[?25l`) and alternate screen buffer switching (`\x1b[?1049h` / `\x1b[?1049l`, `\x1b[?47h` / `\x1b[?47l`).
+  - Implemented visible inverted Solarized block cursor rendering on the active cell when `cursor_visible` is true.
+- **ANSI Movement & Character Editing Commands**:
+  - Added ANSI commands: Cursor Horizontal Absolute (`CSI G` / `` ` ``), Cursor Vertical Absolute (`CSI d`), Next Line (`CSI E`), Previous Line (`CSI F`), Erase Characters (`CSI X`), Delete Characters (`CSI P`), and Insert Blanks (`CSI @`).
+  - Display and line clears (`CSI J` and `CSI K`) preserve the active background color to avoid unstyled gaps.
+
+---
+
+### 📐 Dynamic Drawer Sizing, Frame Refresh & Key Routing
+
+- **Dynamic Height & Maximize Toggle**:
+  - Increased default docked panel height from 260px to 330px with `.overflow_y_scroll()` to eliminate vertical row clipping.
+  - Added Maximized drawer mode expanding up to 500px and 30 rows, complete with a `[⛶ Maximize]` / `[❐ Restore]` header toggle button and Command Palette action.
+- **Continuous Reactive Frame Updates**:
+  - Added continuous frame update notifications (`cx.notify()`) while an interactive PTY session is active, maintaining smooth 60 FPS TUI rendering with zero idle CPU overhead.
+- **Extended Interactive Key Forwarding**:
+  - Added forwarding for `Delete` (`\x1b[3~`), function keys `F1`–`F12`, ASCII control letters (`Ctrl+A`–`Ctrl+Z`), and `Ctrl+U` (clear line) in prompt mode.
+
+---
+
+### ✏️ Editor Core, Multi-Cursor & Mouse Interactions (`arcade-core` & `arcade-ui`)
+
+- **Multi-Cursor Forward Delete**:
+  - Implemented `delete_forward_at_selections` on `Document` to safely forward-delete characters or collapse non-empty selections across multiple cursors without offset corruption.
+  - Wired to the physical `Delete` key.
+- **Mouse Click & Gutter Interactions**:
+  - Added left-click line positioning; Shift-clicking extends selection from the primary cursor anchor.
+  - Added line number gutter click support for full-line selection and multi-line range extension.
+  - Editor clicks automatically unfocus the terminal drawer so keyboard focus returns to the document.
+- **Keyboard Shortcuts**:
+  - `Ctrl+A`: Select All document text.
+  - `Ctrl+N`: Open a new document tab (`untitled-N.rs`).
+  - `Ctrl+W`: Close the active document tab.
+  - `PageUp` / `PageDown`: Jump cursor up / down by 15 lines.
+
+---
+
+### 🛠️ Command Palette & Help Reference
+
+- **Command Palette Additions**:
+  - "New Document Tab" (`Ctrl+N`), "Close Active Tab" (`Ctrl+W`), "Select All" (`Ctrl+A`), and "Toggle Terminal Maximized".
+- **Documentation Modal Update**:
+  - Updated in-app documentation modal keyboard shortcuts cheat-sheet with comprehensive editor and navigation mappings.
+
+---
+
 ## [1.2.0] - 2026-09-23
 
 ### ⚡ Interactive ConPTY / POSIX Terminal, Live TUI Screen Grid, and Containerized Modes
