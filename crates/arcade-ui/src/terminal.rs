@@ -154,6 +154,8 @@ pub struct TerminalState {
     pub active_session: Option<PtySession>,
     /// Live 2D virtual screen grid for interactive TUI rendering.
     pub screen_grid: TerminalScreenGrid,
+    /// Whether the terminal drawer is currently maximized.
+    pub is_maximized: bool,
 }
 
 impl TerminalState {
@@ -198,6 +200,17 @@ impl TerminalState {
             ir_path: detected_ir,
             active_session: None,
             screen_grid: TerminalScreenGrid::new(100, 24),
+            is_maximized: false,
+        }
+    }
+
+    /// Toggles between normal docked height and expanded/maximized height.
+    pub fn toggle_maximized(&mut self) {
+        self.is_maximized = !self.is_maximized;
+        let (cols, rows) = if self.is_maximized { (100, 30) } else { (100, 24) };
+        self.screen_grid.resize(cols, rows);
+        if let Some(ref session) = self.active_session {
+            session.resize(cols as u16, rows as u16);
         }
     }
 
@@ -378,8 +391,10 @@ impl TerminalState {
                 }
             };
 
+            let (cols, rows) = if self.is_maximized { (100, 30) } else { (100, 24) };
+            self.screen_grid.resize(cols, rows);
             self.screen_grid.clear();
-            match PtySession::spawn(&exe_path, &args, &self.working_dir, 100, 24) {
+            match PtySession::spawn(&exe_path, &args, &self.working_dir, cols as u16, rows as u16) {
                 Ok(session) => {
                     self.active_session = Some(session);
                 }
@@ -548,6 +563,38 @@ impl TerminalState {
                 return true;
             }
 
+            if key == "delete" {
+                let _ = session.write_bytes(b"\x1b[3~");
+                return true;
+            }
+
+            // Function keys
+            match key {
+                "f1" => { let _ = session.write_bytes(b"\x1bOP"); return true; }
+                "f2" => { let _ = session.write_bytes(b"\x1bOQ"); return true; }
+                "f3" => { let _ = session.write_bytes(b"\x1bOR"); return true; }
+                "f4" => { let _ = session.write_bytes(b"\x1bOS"); return true; }
+                "f5" => { let _ = session.write_bytes(b"\x1b[15~"); return true; }
+                "f6" => { let _ = session.write_bytes(b"\x1b[17~"); return true; }
+                "f7" => { let _ = session.write_bytes(b"\x1b[18~"); return true; }
+                "f8" => { let _ = session.write_bytes(b"\x1b[19~"); return true; }
+                "f9" => { let _ = session.write_bytes(b"\x1b[20~"); return true; }
+                "f10" => { let _ = session.write_bytes(b"\x1b[21~"); return true; }
+                "f11" => { let _ = session.write_bytes(b"\x1b[23~"); return true; }
+                "f12" => { let _ = session.write_bytes(b"\x1b[24~"); return true; }
+                _ => {}
+            }
+
+            // Ctrl + ASCII letter key forwarding (Ctrl+A -> \x01, Ctrl+D -> \x04, etc.)
+            if ctrl && key.len() == 1 {
+                let b = key.as_bytes()[0];
+                if b.is_ascii_alphabetic() {
+                    let code = b.to_ascii_lowercase() - b'a' + 1;
+                    let _ = session.write_bytes(&[code]);
+                    return true;
+                }
+            }
+
             if let Some(ch) = char_input {
                 let _ = session.write_bytes(ch.as_bytes());
                 return true;
@@ -659,8 +706,14 @@ pub fn render_terminal_panel(
         })
         .collect();
 
+    let panel_height = if terminal.is_maximized {
+        px(500.0)
+    } else {
+        px(330.0)
+    };
+
     div()
-        .h(px(260.0))
+        .h(panel_height)
         .w_full()
         .bg(theme.bg_canvas)
         .border_t_1()
@@ -865,10 +918,29 @@ pub fn render_terminal_panel(
                                     .child("Clear"),
                             )
                         })
+                        // Maximize / Restore Terminal button
+                        .child(
+                            div()
+                                .px_2()
+                                .py_0p5()
+                                .rounded_md()
+                                .bg(theme.badge_bg)
+                                .border_1()
+                                .border_color(theme.border_subtle)
+                                .text_size(px(10.5))
+                                .text_color(theme.text_secondary)
+                                .cursor_pointer()
+                                .hover(|s| s.bg(theme.bg_hover_glass).text_color(theme.text_bright))
+                                .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
+                                    this.terminal.toggle_maximized();
+                                    cx.notify();
+                                }))
+                                .child(if terminal.is_maximized { "❐ Restore" } else { "⛶ Maximize" }),
+                        )
                         // Close Terminal button
                         .child(
                             div()
-                                .ml_2()
+                                .ml_1()
                                 .px_2()
                                 .py_0p5()
                                 .rounded_md()
@@ -897,7 +969,7 @@ pub fn render_terminal_panel(
                     .min_h_0()
                     .px_4()
                     .py_2()
-                    .overflow_hidden()
+                    .overflow_y_scroll()
                     .bg(theme.bg_canvas)
                     .flex()
                     .flex_col()
@@ -1083,6 +1155,15 @@ mod tests {
         // Clear input buffer with Ctrl+C
         assert!(term.handle_key("c", true, None));
         assert!(term.input_buffer.is_empty());
+
+        // Test toggle_maximized
+        assert!(!term.is_maximized);
+        term.toggle_maximized();
+        assert!(term.is_maximized);
+        assert_eq!(term.screen_grid.rows, 30);
+        term.toggle_maximized();
+        assert!(!term.is_maximized);
+        assert_eq!(term.screen_grid.rows, 24);
     }
 
     #[test]

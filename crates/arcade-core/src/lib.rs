@@ -290,6 +290,74 @@ impl Document {
         Ok((tx, after_selections))
     }
 
+    /// Deletes forward (Delete key) at each selection in `selections`.
+    pub fn delete_forward_at_selections(
+        &mut self,
+        selections: &SelectionSet,
+    ) -> Result<(Transaction, SelectionSet), EditError> {
+        let before_rev = self.revision;
+        let before_selections = selections.clone();
+
+        let mut edits = Vec::new();
+        let mut inverse_edits = Vec::new();
+        let mut resulting_cursors = Vec::new();
+
+        let mut cumulative_delta: isize = 0;
+
+        for sel in selections.as_slice() {
+            let delete_range = if !sel.is_empty() {
+                sel.range()
+            } else if sel.head.0 < self.text.len_bytes() {
+                let current_char = self.text.byte_to_char(sel.head.0);
+                let next_char = min(current_char + 1, self.text.len_chars());
+                let end_byte = ByteOffset(self.text.char_to_byte(next_char));
+                TextRange::new(sel.head, end_byte)?
+            } else {
+                // At end of file, nothing to delete
+                let new_cursor_pos = (sel.head.0 as isize + cumulative_delta) as usize;
+                resulting_cursors.push(Selection::cursor(ByteOffset(new_cursor_pos)));
+                continue;
+            };
+
+            let removed_len = delete_range.len_bytes();
+            let new_cursor_pos = (delete_range.start.0 as isize + cumulative_delta) as usize;
+            resulting_cursors.push(Selection::cursor(ByteOffset(new_cursor_pos)));
+            cumulative_delta -= removed_len as isize;
+
+            let removed_text = self.text.byte_slice(delete_range.start.0..delete_range.end.0).to_string();
+            let edit = TextEdit {
+                range: delete_range,
+                replacement: String::new(),
+            };
+            let inverse = TextEdit {
+                range: TextRange::new(delete_range.start, delete_range.start)?,
+                replacement: removed_text,
+            };
+
+            edits.push(edit);
+            inverse_edits.push(inverse);
+        }
+
+        // Apply edits in descending order
+        for edit in edits.iter().rev() {
+            self.apply(edit.clone())?;
+        }
+
+        let after_selections = SelectionSet::from_selections(resulting_cursors, selections.primary_index());
+        let resulting_rev = self.revision;
+
+        let tx = Transaction::new(
+            edits,
+            inverse_edits,
+            before_selections,
+            after_selections.clone(),
+            before_rev,
+            resulting_rev,
+        );
+
+        Ok((tx, after_selections))
+    }
+
     /// Converts a physical byte offset into a character index.
     pub fn byte_to_char(&self, offset: ByteOffset) -> Result<usize, EditError> {
         self.char_index(offset)
@@ -364,5 +432,26 @@ mod tests {
         assert_eq!(doc.to_string(), ", , cherry");
         assert_eq!(new_sels.as_slice()[0].head, ByteOffset(0));
         assert_eq!(new_sels.as_slice()[1].head, ByteOffset(2));
+    }
+
+    #[test]
+    fn deletes_forward_at_multiple_selections() {
+        let mut doc = Document::new("apple, banana, cherry");
+        // Collapsed cursor at 0 ('a') and at 7 ('b')
+        let sel1 = Selection::cursor(ByteOffset(0));
+        let sel2 = Selection::cursor(ByteOffset(7));
+        let selections = SelectionSet::from_selections(vec![sel1, sel2], 0);
+
+        let (_tx, new_sels) = doc.delete_forward_at_selections(&selections).unwrap();
+
+        assert_eq!(doc.to_string(), "pple, anana, cherry");
+        assert_eq!(new_sels.as_slice()[0].head, ByteOffset(0));
+        assert_eq!(new_sels.as_slice()[1].head, ByteOffset(6));
+
+        // Non-empty selection forward delete
+        let mut doc2 = Document::new("apple, banana, cherry");
+        let sel_range = Selection::new(ByteOffset(0), ByteOffset(5)); // "apple"
+        let (_tx, _) = doc2.delete_forward_at_selections(&SelectionSet::single(sel_range)).unwrap();
+        assert_eq!(doc2.to_string(), ", banana, cherry");
     }
 }

@@ -63,6 +63,27 @@ pub fn default_commands() -> Vec<CommandItem> {
             false,
         ),
         CommandItem::new(
+            "FILE",
+            "New Document Tab",
+            "Open a fresh document buffer in a new tab",
+            Some("Ctrl+N"),
+            false,
+        ),
+        CommandItem::new(
+            "FILE",
+            "Close Active Tab",
+            "Close the currently active document tab",
+            Some("Ctrl+W"),
+            false,
+        ),
+        CommandItem::new(
+            "EDIT",
+            "Select All",
+            "Select all text contents in the active document",
+            Some("Ctrl+A"),
+            false,
+        ),
+        CommandItem::new(
             "EDIT",
             "Multi-Cursor: Add Next Occurrence",
             "Place an additional cursor at the next match",
@@ -102,6 +123,13 @@ pub fn default_commands() -> Vec<CommandItem> {
             "Open Integrated Terminal with `ir`",
             "Launch the companion shell session powered by pure-Rust `ir`",
             Some("Ctrl+`"),
+            false,
+        ),
+        CommandItem::new(
+            "TERMINAL",
+            "Toggle Terminal Maximized",
+            "Expand or restore terminal drawer height (24 rows vs 30 rows)",
+            None,
             false,
         ),
         CommandItem::new(

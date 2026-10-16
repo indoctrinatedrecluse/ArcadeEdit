@@ -370,7 +370,7 @@ impl ArcadeShell {
             .workspace_files
             .iter()
             .find(|f| {
-                f.file_name().map_or(false, |name| {
+                f.file_name().is_some_and(|name| {
                     name == "README.md"
                         || name == "Cargo.toml"
                         || name == "main.rs"
@@ -489,11 +489,23 @@ impl ArcadeShell {
             "Save Document" => {
                 self.save_document();
             }
+            "New Document Tab" => {
+                self.new_tab();
+            }
+            "Close Active Tab" => {
+                self.close_tab(self.active_tab_index);
+            }
+            "Select All" => {
+                self.select_all();
+            }
             "Multi-Cursor: Add Next Occurrence" => {
                 self.add_next_cursor();
             }
             "Toggle Workspace File Explorer" => {
                 self.toggle_sidebar();
+            }
+            "Toggle Terminal Maximized" => {
+                self.terminal.toggle_maximized();
             }
             "Arcade Headless: Preview Edits" => {
                 let byte_size = self.document.len_bytes();
@@ -760,6 +772,23 @@ impl ArcadeShell {
         }
     }
 
+    /// Deletes forward (Delete key) across all current cursor selections.
+    pub fn delete_forward(&mut self) {
+        if let Ok((tx, new_sels)) = self.document.delete_forward_at_selections(&self.selections) {
+            self.history.push(tx);
+            self.selections = new_sels;
+            self.sync_to_active_tab();
+            self.trigger_highlight();
+        }
+    }
+
+    /// Selects the entire document content.
+    pub fn select_all(&mut self) {
+        let total_bytes = self.document.len_bytes();
+        self.selections = SelectionSet::single(arcade_core::Selection::new(ByteOffset(0), ByteOffset(total_bytes)));
+        self.sync_to_active_tab();
+    }
+
     /// Performs an undo operation and restores prior selections.
     pub fn undo(&mut self) {
         if let Ok(Some(sels)) = self.history.undo(&mut self.document) {
@@ -852,8 +881,11 @@ impl Render for ArcadeShell {
         }
 
         // Poll any active interactive pseudo-terminal session (e.g. ir pmon, ir nettop)
-        if self.show_terminal && self.terminal.poll_active_session() {
-            cx.notify();
+        if self.show_terminal {
+            let changed = self.terminal.poll_active_session();
+            if changed || self.terminal.active_session.is_some() {
+                cx.notify();
+            }
         }
 
         // Ensure window keyboard focus is directed to this shell component
@@ -1128,6 +1160,27 @@ impl Render for ArcadeShell {
                     return;
                 }
 
+                // Select All (Ctrl+A)
+                if ctrl && key == "a" {
+                    this.select_all();
+                    cx.notify();
+                    return;
+                }
+
+                // New Tab (Ctrl+N)
+                if ctrl && key == "n" {
+                    this.new_tab();
+                    cx.notify();
+                    return;
+                }
+
+                // Close Tab (Ctrl+W)
+                if ctrl && key == "w" {
+                    this.close_tab(this.active_tab_index);
+                    cx.notify();
+                    return;
+                }
+
                 // Multi-Cursor Add Next (Ctrl+D)
                 if ctrl && key == "d" {
                     this.add_next_cursor();
@@ -1191,6 +1244,32 @@ impl Render for ArcadeShell {
                 }
                 if key == "end" {
                     this.selections = this.selections.move_to_line_end(this.document.rope(), shift);
+                    this.scroll_cursor_into_view();
+                    cx.notify();
+                    return;
+                }
+
+                // Navigation: PageUp / PageDown
+                if key == "pageup" {
+                    for _ in 0..15 {
+                        this.selections = this.selections.move_up(this.document.rope(), shift);
+                    }
+                    this.scroll_cursor_into_view();
+                    cx.notify();
+                    return;
+                }
+                if key == "pagedown" {
+                    for _ in 0..15 {
+                        this.selections = this.selections.move_down(this.document.rope(), shift);
+                    }
+                    this.scroll_cursor_into_view();
+                    cx.notify();
+                    return;
+                }
+
+                // Delete (Forward)
+                if key == "delete" {
+                    this.delete_forward();
                     this.scroll_cursor_into_view();
                     cx.notify();
                     return;
@@ -1584,7 +1663,7 @@ impl Render for ArcadeShell {
                                             let visible_items = build_visible_tree(root, &self.expanded_folders);
 
                                             let tree_nodes: Vec<_> = visible_items.into_iter().map(|item| {
-                                                let is_active = !item.is_dir && current_opt.as_ref().map_or(false, |p| p == &item.path);
+                                                let is_active = !item.is_dir && (current_opt.as_ref() == Some(&item.path));
                                                 let path_clone = item.path.clone();
                                                 let is_dir = item.is_dir;
                                                 let is_bin = item.is_binary();
@@ -1833,6 +1912,7 @@ impl Render for ArcadeShell {
                                 &self.find_replace.matches,
                                 self.find_replace.current_match(),
                                 &self.editor_scroll_handle,
+                                cx,
                             ))
                             .when(self.find_replace.is_open, |p| {
                                 p.child(render_find_replace_bar(&theme, &self.find_replace, cx))
@@ -2377,5 +2457,64 @@ mod tests {
         // Toggle collapse src_dir
         shell.toggle_folder_expansion(src_dir.clone());
         assert!(!shell.expanded_folders.contains(&src_dir));
+    }
+
+    #[test]
+    fn deletes_forward_and_selects_all() {
+        let mut shell = ArcadeShell::test_stub();
+        shell.document = Document::new("Hello World");
+        shell.selections = SelectionSet::cursor(ByteOffset(0));
+        shell.sync_to_active_tab();
+
+        // 1. Forward delete removes character ahead of cursor ('H')
+        shell.delete_forward();
+        assert_eq!(shell.document.to_string(), "ello World");
+
+        // 2. Select All selects full buffer
+        shell.select_all();
+        assert_eq!(shell.selections.primary().head, ByteOffset(shell.document.len_bytes()));
+        assert_eq!(shell.selections.primary().anchor, ByteOffset(0));
+
+        // 3. Typing over full selection replaces entire text
+        shell.insert_text("Arcade");
+        assert_eq!(shell.document.to_string(), "Arcade");
+    }
+
+    #[test]
+    fn executes_new_tab_close_tab_and_terminal_maximize() {
+        let mut shell = ArcadeShell::test_stub();
+        assert_eq!(shell.tabs.len(), 1);
+
+        // 1. New tab via palette
+        let new_tab_idx = shell
+            .commands
+            .iter()
+            .position(|c| c.title == "New Document Tab")
+            .expect("New Document Tab command missing");
+        shell.execute_command_at(new_tab_idx);
+        assert_eq!(shell.tabs.len(), 2);
+        assert_eq!(shell.active_tab_index, 1);
+
+        // 2. Close active tab via palette
+        let close_tab_idx = shell
+            .commands
+            .iter()
+            .position(|c| c.title == "Close Active Tab")
+            .expect("Close Active Tab command missing");
+        shell.execute_command_at(close_tab_idx);
+        assert_eq!(shell.tabs.len(), 1);
+        assert_eq!(shell.active_tab_index, 0);
+
+        // 3. Toggle terminal maximize command
+        let max_idx = shell
+            .commands
+            .iter()
+            .position(|c| c.title == "Toggle Terminal Maximized")
+            .expect("Toggle Terminal Maximized command missing");
+        assert!(!shell.terminal.is_maximized);
+        shell.execute_command_at(max_idx);
+        assert!(shell.terminal.is_maximized);
+        shell.execute_command_at(max_idx);
+        assert!(!shell.terminal.is_maximized);
     }
 }

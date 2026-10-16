@@ -1,9 +1,10 @@
 //! Editor view surface with Solarized minimalist aesthetics, live document rendering, and vibrant syntax highlighting.
 
 use crate::theme::SolarizedTheme;
-use arcade_core::{Document, SelectionSet, TextRange};
+use crate::ArcadeShell;
+use arcade_core::{ByteOffset, Document, Selection, SelectionSet, TextRange};
 use arcade_language::{resolve_line_tokens, HighlightKind, HighlightSpan, LineToken};
-use gpui::{div, prelude::*, px, Div, IntoElement, ScrollHandle};
+use gpui::{div, prelude::*, px, Context, Div, IntoElement, ScrollHandle};
 
 /// Represents a syntax-highlighted visual token (preserved for backward compatibility).
 #[derive(Clone, Debug)]
@@ -66,6 +67,7 @@ pub fn render_token(theme: &SolarizedTheme, token: &LineToken) -> Div {
 }
 
 /// Renders the live interactive editor surface for a document and its multi-cursor selection set.
+#[allow(clippy::too_many_arguments)]
 pub fn render_live_editor_surface(
     theme: &SolarizedTheme,
     document: &Document,
@@ -75,6 +77,7 @@ pub fn render_live_editor_surface(
     find_matches: &[TextRange],
     active_match: Option<TextRange>,
     scroll_handle: &ScrollHandle,
+    cx: &mut Context<ArcadeShell>,
 ) -> impl IntoElement {
     let rope = document.rope();
     let num_lines = document.len_lines();
@@ -170,7 +173,7 @@ pub fn render_live_editor_surface(
                                     let line_start_byte = rope.line_to_byte(line_idx);
                                     let line_end_byte = line_start_byte + clean_str.len();
 
-                                    let has_active_match = active_match.map_or(false, |m| m.start.0 < line_end_byte && m.end.0 > line_start_byte);
+                                    let has_active_match = active_match.is_some_and(|m| m.start.0 < line_end_byte && m.end.0 > line_start_byte);
                                     let has_any_match = find_matches.iter().any(|m| m.start.0 < line_end_byte && m.end.0 > line_start_byte);
 
                                     div()
@@ -178,6 +181,7 @@ pub fn render_live_editor_surface(
                                         .items_center()
                                         .h(px(22.0))
                                         .w_full()
+                                        .cursor_text()
                                         // Active Line or Find Match Horizontal Sheen
                                         .bg(if is_active {
                                             theme.bg_active_glass
@@ -196,6 +200,21 @@ pub fn render_live_editor_surface(
                                         } else {
                                             gpui::rgba(0x00000000)
                                         })
+                                        .on_mouse_down(
+                                            gpui::MouseButton::Left,
+                                            cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                                                this.terminal_focused = false;
+                                                let line_start = this.document.line_start_byte(line_idx);
+                                                if event.modifiers.shift {
+                                                    let anchor = this.selections.primary().anchor;
+                                                    this.selections = SelectionSet::single(Selection::new(anchor, line_start));
+                                                } else {
+                                                    this.selections = SelectionSet::cursor(line_start);
+                                                }
+                                                this.sync_to_active_tab();
+                                                cx.notify();
+                                            }),
+                                        )
                                         // Line Number Gutter
                                         .child(
                                             div()
@@ -203,6 +222,7 @@ pub fn render_live_editor_surface(
                                                 .pr_4()
                                                 .flex()
                                                 .justify_end()
+                                                .cursor_pointer()
                                                 .font_family("Consolas, 'Cascadia Code', 'Fira Code', 'Courier New', monospace")
                                                 .text_size(px(12.0))
                                                 .text_color(if is_active || has_active_match {
@@ -212,6 +232,24 @@ pub fn render_live_editor_surface(
                                                 } else {
                                                     theme.text_muted
                                                 })
+                                                .on_mouse_down(
+                                                    gpui::MouseButton::Left,
+                                                    cx.listener(move |this, event: &gpui::MouseDownEvent, _window, cx| {
+                                                        cx.stop_propagation();
+                                                        this.terminal_focused = false;
+                                                        let line_start = this.document.line_start_byte(line_idx);
+                                                        let line_slice = this.document.rope().line(line_idx);
+                                                        let line_end = line_start.0 + line_slice.len_bytes();
+                                                        if event.modifiers.shift {
+                                                            let anchor = this.selections.primary().anchor;
+                                                            this.selections = SelectionSet::single(Selection::new(anchor, ByteOffset(line_end)));
+                                                        } else {
+                                                            this.selections = SelectionSet::single(Selection::new(line_start, ByteOffset(line_end)));
+                                                        }
+                                                        this.sync_to_active_tab();
+                                                        cx.notify();
+                                                    }),
+                                                )
                                                 .child(format!("{}", line_idx + 1)),
                                         )
                                         // Highlighted Code Spans and Cursor

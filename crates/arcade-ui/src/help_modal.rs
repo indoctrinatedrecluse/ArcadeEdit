@@ -548,11 +548,18 @@ fn render_shortcuts_content(theme: &SolarizedTheme) -> Div {
         ("Ctrl + S", "Save active document changes to disk"),
         ("Ctrl + `", "Toggle integrated terminal drawer (`ir` CLI)"),
         ("Ctrl + B", "Toggle workspace file explorer sidebar"),
+        ("Ctrl + F", "Open Find in Document search bar"),
+        ("Ctrl + H", "Open Find & Replace bar"),
+        ("Ctrl + A", "Select all document contents"),
+        ("Ctrl + N", "Open new empty document tab"),
+        ("Ctrl + W", "Close active document tab"),
         ("Ctrl + D", "Multi-cursor: add next cursor occurrence"),
+        ("Delete", "Forward delete characters across selections"),
+        ("PageUp / PageDown", "Jump cursor up / down 15 lines"),
         ("Ctrl + Z", "Undo last text editing transaction"),
         ("Ctrl + Y / Ctrl+Shift+Z", "Redo last undone transaction"),
         ("F1", "Open in-app Help menu & documentation modal"),
-        ("ESC", "Dismiss command palette, help modal, or collapse selections"),
+        ("ESC", "Dismiss command palette, find bar, help modal, or collapse selections"),
     ];
 
     let rows: Vec<_> = shortcuts

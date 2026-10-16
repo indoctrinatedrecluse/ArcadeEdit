@@ -14,7 +14,7 @@ fn main() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|cx| ArcadeShell::welcome(cx)),
+            |_, cx| cx.new(ArcadeShell::welcome),
         )
         .expect("ArcadeEdit could not open its desktop window");
 
