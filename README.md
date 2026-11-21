@@ -135,6 +135,32 @@ The built-in PTY terminal makes interactive and ordinary `ir` commands available
 - LSP as a required dependency or product center of gravity
 - Collaboration, AI features, and a public extension marketplace
 
+## Next release priorities
+
+The following items were identified in the v1.3.0 audit and remain implementation work. They are high priority for the next release; address them before adding unrelated feature scope. See `AUDIT_BACKLOG.md` for the full phase checklist and context.
+
+### P0 — Reliability and data safety
+
+- Bound ordinary shell command output while it is being read, limit concurrent command workers, and reliably reap child processes and reader threads during panel closure and application shutdown.
+- Make workspace-wide replacement transactional or provide rollback so a failed run cannot silently leave earlier files changed. Preserve the existing per-file result and error reporting.
+- Resolve bundled `ir` save/quit key behavior in the integrated PTY, derive PTY dimensions from the rendered terminal viewport, and propagate window resizes.
+- Verify fetched `ir` artifacts with trusted checksums or signatures; verify packaged artifacts, confirm the bundled utility's version/help claims, and complete upstream license/attribution notices.
+
+### P1 — Editor and automation correctness
+
+- Render only visible editor lines and make cursor movement and deletion grapheme-cluster-aware.
+- Add reload, compare, and safe conflict-resolution actions for files changed externally; improve file-picker cancellation and error reporting.
+- Route CLI execution through `arcade-protocol::Command`, define structured command errors and exit codes, and document search/binary/UTF-8 result policies.
+- Add configurable workspace size/depth limits and report paths omitted by those limits.
+- Test navigation and quit behavior across bundled TUIs; show command exit status and distinguish normal exit, startup/IO errors, interrupt, and forced termination.
+- Confirm remote Linux/container CI results, smoke-test published packages, and review platform coverage.
+
+### P2 — Follow-up editor and delivery improvements
+
+- Add split panes, session restore, soft wrap, folds, outlines, settings/keymaps, and typography as separately scoped, tested features.
+- Extend automatic update installation beyond Windows x86_64, with platform-appropriate signature/checksum validation and restart behavior.
+- Complete the careful cleanup review after behavior coverage, including redundant active-tab state and compatibility code.
+
 ## 🗺️ Delivery sequence
 
 1. ✅ 🧠 Scaffold the Cargo workspace and make `arcade-core` independently testable.

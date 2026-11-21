@@ -12,7 +12,7 @@ This is the working record for the desktop editor, headless CLI, container runti
 - [x] Add Save As for untitled buffers and dirty-tab Save/Discard/Cancel prompts.
 - [ ] Add reload/compare/overwrite choices for external edits; current save protection blocks overwrite using timestamp, size, and a content fingerprint.
 - [x] Run the container as a non-root user and document bind-mount ownership.
-- [ ] Close dirty tabs safely on application/window exit as well as per-tab close.
+- [x] Close dirty tabs safely on application/window exit as well as per-tab close with Save All/Discard/Cancel.
 
 ## Phase 2 — Desktop editor
 
@@ -29,7 +29,7 @@ This is the working record for the desktop editor, headless CLI, container runti
 - [ ] Render visible lines only; current editor constructs every line, so large documents below the limit can still be expensive.
 - [ ] Add grapheme-cluster-aware cursor movement/deletion; core offsets currently move by Unicode scalar.
 - [ ] Add a reload command and richer external-file conflict resolution.
-- [ ] Improve file-picker cancellation/error reporting and track dirty state on application exit.
+- [ ] Improve file-picker cancellation/error reporting; dirty state is protected on application/window exit.
 - [ ] Implement split panes, session restore, soft wrap, folds, outlines, settings/keymaps, and typography only as separately scoped features.
 
 ## Phase 3 — Headless automation
@@ -41,7 +41,7 @@ This is the working record for the desktop editor, headless CLI, container runti
 - [ ] Make `arcade-protocol::Command` the actual CLI dispatch boundary; replace JSON replace output now includes collected failures and committed file summaries.
 - [ ] Decide/document overlapping matches, multiline result line mapping, binary files, and invalid UTF-8 policy.
 - [ ] Add configurable size/depth limits and report paths omitted by depth limits.
-- [ ] Add transactional multi-file writes and machine-readable per-file partial failure details.
+- [ ] Add transactional multi-file writes or rollback; machine-readable per-file committed results and failure details are implemented.
 - [x] Prove headless builds without desktop/GPUI dependencies locally and in CI.
 
 ## Phase 4 — Container and delivery
