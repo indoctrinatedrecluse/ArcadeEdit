@@ -11,21 +11,28 @@ pub mod help_modal;
 pub mod terminal;
 pub mod theme;
 pub mod tree_view;
+pub mod updater;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use arcade_core::selection::SelectionSet;
-use arcade_core::{ByteOffset, Document, History};
+use arcade_core::{
+    has_external_change, load_from_file, save_to_file, ByteOffset, Document, FileMetadata, History,
+};
 use arcade_language::{HighlightSpan, HighlightWorker, LanguageId, LanguageService};
 use command_palette::{default_commands, render_command_palette, CommandItem};
 use editor_view::render_live_editor_surface;
 use find_replace::{render_find_replace_bar, FindFocus, FindKeyAction, FindReplaceState};
-use gpui::{div, prelude::*, px, Context, FocusHandle, IntoElement, Render, ScrollHandle, Window};
+use gpui::{
+    div, prelude::*, px, ClipboardItem, Context, FocusHandle, IntoElement, Render, ScrollHandle,
+    Window,
+};
 use help_modal::{render_help_modal, HelpSection};
 use terminal::{render_terminal_panel, TerminalLine, TerminalLineKind, TerminalState};
 use theme::SolarizedTheme;
 use tree_view::build_visible_tree;
+use updater::UpdateState;
 
 /// Identifies the custom visual system used by the desktop application.
 pub const DESIGN_SYSTEM_NAME: &str = "ArcadeEdit Solarized Glass";
@@ -49,6 +56,12 @@ pub struct EditorTab {
     pub highlight_spans: Vec<HighlightSpan>,
     /// Associated disk file path (if loaded from or saved to disk).
     pub file_path: Option<PathBuf>,
+    /// File metadata captured on open/save for detecting external edits.
+    pub file_metadata: Option<FileMetadata>,
+    /// Newline sequence found in the document, defaulting to LF for new files.
+    pub line_ending: String,
+    /// Human-readable newline profile for status display.
+    pub line_ending_label: String,
 }
 
 impl EditorTab {
@@ -61,6 +74,8 @@ impl EditorTab {
         file_path: Option<PathBuf>,
         highlight_spans: Vec<HighlightSpan>,
     ) -> Self {
+        let text = document.to_string();
+        let (line_ending, line_ending_label) = detect_line_ending(&text);
         Self {
             id,
             title: title.into(),
@@ -70,8 +85,32 @@ impl EditorTab {
             language,
             highlight_spans,
             file_path,
+            file_metadata: None,
+            line_ending,
+            line_ending_label,
         }
     }
+}
+
+fn detect_line_ending(text: &str) -> (String, String) {
+    let bytes = text.as_bytes();
+    let (mut has_crlf, mut has_lf, mut first_ending) = (false, false, None);
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'\n' {
+            let is_crlf = index > 0 && bytes[index - 1] == b'\r';
+            has_crlf |= is_crlf;
+            has_lf |= !is_crlf;
+            first_ending.get_or_insert(if is_crlf { "\r\n" } else { "\n" });
+        }
+    }
+    let line_ending = first_ending.unwrap_or("\n").to_string();
+    let label = match (has_crlf, has_lf) {
+        (true, true) => "Mixed (CRLF + LF)",
+        (true, false) => "CRLF",
+        (false, true) => "LF",
+        (false, false) => "LF (default)",
+    };
+    (line_ending, label.to_string())
 }
 
 /// The rich custom-rendered ArcadeEdit desktop application shell.
@@ -127,6 +166,20 @@ pub struct ArcadeShell {
     pub terminal_focused: bool,
     /// Controls visibility of the in-app Help and Documentation modal.
     pub show_help_modal: bool,
+    /// Shows a read-only preview of the current document.
+    pub show_preview_modal: bool,
+    /// Shows the UI-consistent updater modal.
+    pub show_updater_modal: bool,
+    /// Shows the Go to Line dialog.
+    pub show_goto_line_modal: bool,
+    /// Text entered into the Go to Line dialog.
+    pub goto_line_input: String,
+    /// Latest automatic or manual update-check state.
+    pub update_state: UpdateState,
+    /// Token used to ignore stale concurrent update-check responses.
+    pub update_check_generation: u64,
+    /// Defers context-bound update checks requested through context-free commands.
+    pub pending_update_check: bool,
     /// The active tab / section inside the Help modal.
     pub active_help_section: HelpSection,
     /// Floating Find & Replace widget state.
@@ -135,6 +188,10 @@ pub struct ArcadeShell {
     pub expanded_folders: BTreeSet<PathBuf>,
     /// Scroll handle controlling the main editor canvas viewport.
     pub editor_scroll_handle: ScrollHandle,
+    /// Tab awaiting a save/discard decision before closing.
+    pub pending_close_tab: Option<usize>,
+    /// Application shutdown is waiting on a dirty-document decision.
+    pub pending_window_close: bool,
 }
 
 impl ArcadeShell {
@@ -163,7 +220,7 @@ impl ArcadeShell {
         let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let terminal = TerminalState::new(working_dir);
 
-        Self {
+        let mut shell = Self {
             tabs: vec![initial_tab],
             active_tab_index: 0,
             next_tab_id: 2,
@@ -174,7 +231,7 @@ impl ArcadeShell {
             focus_handle: Some(focus_handle),
             theme: SolarizedTheme::dark(),
             is_dark_theme: true,
-            show_command_palette: true,
+            show_command_palette: false,
             show_sidebar: true,
             command_query: String::new(),
             commands: default_commands(),
@@ -189,11 +246,22 @@ impl ArcadeShell {
             show_terminal: false,
             terminal_focused: false,
             show_help_modal: false,
+            show_preview_modal: false,
+            show_updater_modal: false,
+            show_goto_line_modal: false,
+            goto_line_input: String::new(),
+            update_state: UpdateState::Idle,
+            update_check_generation: 0,
+            pending_update_check: false,
             active_help_section: HelpSection::IrDocs,
             find_replace: FindReplaceState::new(),
             expanded_folders: BTreeSet::new(),
             editor_scroll_handle: ScrollHandle::new(),
-        }
+            pending_close_tab: None,
+            pending_window_close: false,
+        };
+        shell.check_for_updates(cx, false);
+        shell
     }
 
     /// Creates a shell without a window focus handle (suitable for unit tests).
@@ -219,7 +287,7 @@ impl ArcadeShell {
             focus_handle: None,
             theme: SolarizedTheme::dark(),
             is_dark_theme: true,
-            show_command_palette: true,
+            show_command_palette: false,
             show_sidebar: true,
             command_query: String::new(),
             commands: default_commands(),
@@ -234,10 +302,19 @@ impl ArcadeShell {
             show_terminal: false,
             terminal_focused: false,
             show_help_modal: false,
+            show_preview_modal: false,
+            show_updater_modal: false,
+            show_goto_line_modal: false,
+            goto_line_input: String::new(),
+            update_state: UpdateState::Idle,
+            update_check_generation: 0,
+            pending_update_check: false,
             active_help_section: HelpSection::IrDocs,
             find_replace: FindReplaceState::new(),
             expanded_folders: BTreeSet::new(),
             editor_scroll_handle: ScrollHandle::new(),
+            pending_close_tab: None,
+            pending_window_close: false,
         }
     }
 
@@ -274,30 +351,240 @@ impl ArcadeShell {
 
     /// Marks the active document as saved, writing to disk if a file path is associated.
     pub fn save_document(&mut self) {
-        if let Some(path) = &self.current_file_path {
-            let _ = std::fs::write(path, self.document.to_string());
+        if self.current_file_path.is_none() {
+            self.save_document_as();
+            return;
         }
-        self.history.mark_saved(self.document.revision());
-        self.sync_to_active_tab();
+        self.save_to_path(self.current_file_path.clone().expect("checked above"));
+    }
+
+    /// Prompts for a new file path and saves the active document there.
+    pub fn save_document_as(&mut self) {
+        let mut dialog = rfd::FileDialog::new().set_title("Save Document As");
+        if let Some(root) = &self.workspace_root {
+            dialog = dialog.set_directory(root);
+        }
+        let Some(path) = dialog.save_file() else {
+            return;
+        };
+        self.save_to_path(path);
+    }
+
+    fn save_to_path(&mut self, path: PathBuf) {
+        if self.current_file_path.as_ref() == Some(&path) {
+            if let Some(metadata) = self
+                .tabs
+                .get(self.active_tab_index)
+                .and_then(|tab| tab.file_metadata.as_ref())
+            {
+                if has_external_change(&path, metadata) {
+                    self.report_terminal_error(format!(
+                        "{} changed on disk; reload it or use Save As to avoid overwriting external edits.",
+                        path.display()
+                    ));
+                    return;
+                }
+            }
+        }
+
+        match save_to_file(&self.document, &path) {
+            Ok(metadata) => {
+                self.current_file_path = Some(path);
+                if let Some(tab) = self.tabs.get_mut(self.active_tab_index) {
+                    tab.file_path = self.current_file_path.clone();
+                    tab.file_metadata = Some(metadata);
+                    (tab.line_ending, tab.line_ending_label) =
+                        detect_line_ending(&self.document.to_string());
+                }
+                self.history.mark_saved(self.document.revision());
+                self.sync_to_active_tab();
+            }
+            Err(error) => self.report_terminal_error(format!("Save failed: {error}")),
+        }
+    }
+
+    fn report_terminal_error(&mut self, message: String) {
+        self.terminal
+            .lines
+            .push(TerminalLine::new(TerminalLineKind::Error, message));
+        self.show_terminal = true;
+        self.terminal.is_open = true;
+    }
+
+    fn save_all_and_quit(&mut self, cx: &mut Context<Self>) {
+        for index in 0..self.tabs.len() {
+            if !self.tabs[index]
+                .history
+                .is_dirty(self.tabs[index].document.revision())
+            {
+                continue;
+            }
+            let path = self.tabs[index].file_path.clone().or_else(|| {
+                rfd::FileDialog::new()
+                    .set_title("Save Document Before Closing")
+                    .save_file()
+            });
+            let Some(path) = path else {
+                return;
+            };
+            if self.tabs[index].file_path.as_ref() == Some(&path)
+                && self.tabs[index]
+                    .file_metadata
+                    .as_ref()
+                    .is_some_and(|metadata| has_external_change(&path, metadata))
+            {
+                self.report_terminal_error(format!(
+                    "{} changed on disk; closing was cancelled to protect the external edit.",
+                    path.display()
+                ));
+                self.pending_window_close = false;
+                return;
+            }
+            match save_to_file(&self.tabs[index].document, &path) {
+                Ok(metadata) => {
+                    let tab = &mut self.tabs[index];
+                    tab.title = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "Untitled".to_string());
+                    tab.file_path = Some(path);
+                    tab.file_metadata = Some(metadata);
+                    tab.history.mark_saved(tab.document.revision());
+                }
+                Err(error) => {
+                    self.report_terminal_error(format!("Save before close failed: {error}"));
+                    self.pending_window_close = false;
+                    return;
+                }
+            }
+        }
+        self.pending_window_close = false;
+        cx.quit();
+    }
+
+    /// Checks for a newer published release. The desktop startup calls this automatically.
+    pub fn check_for_updates(&mut self, cx: &mut Context<Self>, show_result: bool) {
+        self.update_check_generation = self.update_check_generation.wrapping_add(1);
+        let generation = self.update_check_generation;
+        self.update_state = UpdateState::Checking;
+        if show_result {
+            self.show_updater_modal = true;
+        }
+        let client = cx.http_client();
+        cx.spawn(async move |this, cx| {
+            let result = updater::check_for_update(&client, env!("CARGO_PKG_VERSION")).await;
+            let _ = this.update(cx, |this, cx| {
+                if this.update_check_generation != generation {
+                    return;
+                }
+                this.update_state = match result {
+                    Ok(Some(info)) => {
+                        if !show_result {
+                            this.show_updater_modal = true;
+                        }
+                        UpdateState::Available(info)
+                    }
+                    Ok(None) => UpdateState::UpToDate,
+                    Err(error) => UpdateState::Failed(error),
+                };
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn start_pending_update_check(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.pending_update_check) {
+            self.check_for_updates(cx, true);
+        }
+    }
+
+    /// Downloads the verified release asset, stages it beside the app, and restarts on Windows.
+    pub fn install_update(&mut self, cx: &mut Context<Self>) {
+        let UpdateState::Available(info) = self.update_state.clone() else {
+            return;
+        };
+        #[cfg(not(windows))]
+        {
+            self.update_state = UpdateState::Failed(
+                "Automatic installation is currently available for Windows desktop releases only."
+                    .into(),
+            );
+            cx.notify();
+            return;
+        }
+
+        #[cfg(windows)]
+        {
+            let Ok(executable) = std::env::current_exe() else {
+                self.update_state = UpdateState::Failed(
+                    "Could not locate the running ArcadeEdit executable.".into(),
+                );
+                cx.notify();
+                return;
+            };
+            let client = cx.http_client();
+            self.update_state = UpdateState::Downloading(info.version.clone());
+            let version = info.version.clone();
+            cx.notify();
+            cx.spawn(async move |this, cx| {
+                let result = match updater::download_and_stage(&client, &info, &executable).await {
+                    Ok(staged) => {
+                        updater::launch_installer(&staged, &executable).map(|()| version.clone())
+                    }
+                    Err(error) => Err(error),
+                };
+                let _ = this.update(cx, |this, cx| match result {
+                    Ok(version) => {
+                        this.update_state = UpdateState::Restarting(version);
+                        this.show_updater_modal = true;
+                        cx.notify();
+                        cx.quit();
+                    }
+                    Err(error) => {
+                        this.update_state = UpdateState::Failed(error);
+                        this.show_updater_modal = true;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
     }
 
     /// Opens a file from disk into an editor tab, detecting language and updating highlights.
     pub fn open_file(&mut self, path: PathBuf) -> Result<(), String> {
         // 1. Guard against opening binary / executable files
         if tree_view::is_binary_path(&path) {
-            return Err(format!("Cannot open binary or executable file: {}", path.display()));
+            return Err(format!(
+                "Cannot open binary or executable file: {}",
+                path.display()
+            ));
         }
 
         // 2. If already open in an existing tab, activate it
-        if let Some(existing_idx) = self.tabs.iter().position(|t| t.file_path.as_ref() == Some(&path)) {
+        if let Some(existing_idx) = self
+            .tabs
+            .iter()
+            .position(|t| t.file_path.as_ref() == Some(&path))
+        {
             self.select_tab(existing_idx);
             return Ok(());
         }
 
-        // 3. Read file from disk
-        let content = std::fs::read_to_string(&path)
-            .map_err(|e| format!("Failed to read file {}: {e}", path.display()))?;
+        let metadata = std::fs::metadata(&path)
+            .map_err(|e| format!("Failed to inspect file {}: {e}", path.display()))?;
+        if metadata.len() > arcade_workspace::DEFAULT_HUGE_FILE_THRESHOLD_BYTES as u64 {
+            return Err(format!(
+                "File is larger than the current {} MiB editor limit: {}",
+                arcade_workspace::DEFAULT_HUGE_FILE_THRESHOLD_BYTES / (1024 * 1024),
+                path.display()
+            ));
+        }
 
+        // 3. Read file from disk
+        let (doc, metadata) = load_from_file(&path)
+            .map_err(|e| format!("Failed to read file {}: {e}", path.display()))?;
         let language = LanguageId::from_path(&path);
         let file_title = path
             .file_name()
@@ -305,18 +592,10 @@ impl ArcadeShell {
             .unwrap_or("file")
             .to_string();
 
-        // 3. Immediately compute syntax highlight spans synchronously (<2ms)
-        let spans = if let Some(service) = &mut self.language_service {
-            service.highlight(language, &content)
-        } else if let Ok(mut service) = LanguageService::new() {
-            let s = service.highlight(language, &content);
-            self.language_service = Some(service);
-            s
-        } else {
-            Vec::new()
-        };
+        // Highlighting runs on the worker so opening a large supported file does not
+        // block the UI thread while tree-sitter parses it.
+        let spans = Vec::new();
 
-        let doc = Document::new(&content);
         let mut hist = History::new();
         hist.mark_saved(doc.revision());
 
@@ -325,11 +604,14 @@ impl ArcadeShell {
 
         let mut new_tab = EditorTab::new(id, file_title, doc, language, Some(path.clone()), spans);
         new_tab.history = hist;
+        new_tab.file_metadata = Some(metadata);
 
         // If the only tab is an unmodified default Welcome or empty untitled buffer, replace it
         let should_replace_first = self.tabs.len() == 1
             && self.tabs[0].file_path.is_none()
-            && !self.tabs[0].history.is_dirty(self.tabs[0].document.revision())
+            && !self.tabs[0]
+                .history
+                .is_dirty(self.tabs[0].document.revision())
             && (self.tabs[0].title == "Welcome.md" || self.tabs[0].title.starts_with("untitled"));
 
         if should_replace_first {
@@ -359,12 +641,17 @@ impl ArcadeShell {
 
     /// Opens a workspace directory, discovers candidate files, and updates the explorer.
     pub fn open_folder(&mut self, path: PathBuf) {
-        let files = arcade_workspace::discover_files(&[&path]);
+        let discovery = arcade_workspace::discover_files_with_errors(&[&path]);
+        let files = discovery.files;
         self.workspace_root = Some(path.clone());
         self.workspace_files = files;
         self.terminal.working_dir = path.clone();
         self.show_sidebar = true;
         self.expanded_folders.insert(path.clone());
+
+        for error in discovery.errors {
+            self.report_terminal_error(format!("Workspace discovery warning: {error}"));
+        }
 
         if let Some(preferred) = self
             .workspace_files
@@ -380,7 +667,9 @@ impl ArcadeShell {
             .cloned()
             .or_else(|| self.workspace_files.first().cloned())
         {
-            let _ = self.open_file(preferred);
+            if let Err(error) = self.open_file(preferred) {
+                self.report_terminal_error(error);
+            }
         }
     }
 
@@ -401,10 +690,21 @@ impl ArcadeShell {
         let primary_line = self.document.line_of_byte(self.selections.primary().head);
         if primary_line + 1 < rope.len_lines() {
             let next_line_start = rope.line_to_byte(primary_line + 1);
-            self.selections.add(arcade_core::selection::Selection::cursor(ByteOffset(next_line_start)));
+            self.selections
+                .add(arcade_core::selection::Selection::cursor(ByteOffset(
+                    next_line_start,
+                )));
         } else {
-            let next_offset = ByteOffset(self.selections.primary().head.0.saturating_add(1).min(self.document.len_bytes()));
-            self.selections.add(arcade_core::selection::Selection::cursor(next_offset));
+            let next_offset = ByteOffset(
+                self.selections
+                    .primary()
+                    .head
+                    .0
+                    .saturating_add(1)
+                    .min(self.document.len_bytes()),
+            );
+            self.selections
+                .add(arcade_core::selection::Selection::cursor(next_offset));
         }
     }
 
@@ -440,7 +740,11 @@ impl ArcadeShell {
         if self.commands.is_empty() {
             return;
         }
-        let current_idx = self.commands.iter().position(|c| c.is_selected).unwrap_or(0);
+        let current_idx = self
+            .commands
+            .iter()
+            .position(|c| c.is_selected)
+            .unwrap_or(0);
         let next_idx = (current_idx + 1) % self.commands.len();
         for (i, cmd) in self.commands.iter_mut().enumerate() {
             cmd.is_selected = i == next_idx;
@@ -452,7 +756,11 @@ impl ArcadeShell {
         if self.commands.is_empty() {
             return;
         }
-        let current_idx = self.commands.iter().position(|c| c.is_selected).unwrap_or(0);
+        let current_idx = self
+            .commands
+            .iter()
+            .position(|c| c.is_selected)
+            .unwrap_or(0);
         let prev_idx = if current_idx == 0 {
             self.commands.len() - 1
         } else {
@@ -489,6 +797,9 @@ impl ArcadeShell {
             "Save Document" => {
                 self.save_document();
             }
+            "Save Document As..." => {
+                self.save_document_as();
+            }
             "New Document Tab" => {
                 self.new_tab();
             }
@@ -507,19 +818,8 @@ impl ArcadeShell {
             "Toggle Terminal Maximized" => {
                 self.terminal.toggle_maximized();
             }
-            "Arcade Headless: Preview Edits" => {
-                let byte_size = self.document.len_bytes();
-                let char_count = self.document.rope().len_chars();
-                let line_count = self.document.rope().len_lines();
-                let preview_msg = format!(
-                    "\n// [Arcade Headless Preview: {} bytes, {} chars, {} lines, rev: {:?} - 0 errors]\n",
-                    byte_size, char_count, line_count, self.document.revision()
-                );
-                self.insert_text(&preview_msg);
-                self.terminal.lines.push(TerminalLine::new(
-                    TerminalLineKind::Info,
-                    format!("Headless Inspection: {} bytes, {} lines (Revision {:?})", byte_size, line_count, self.document.revision()),
-                ));
+            "Preview Current Document" => {
+                self.show_preview_modal = true;
             }
             "Open Integrated Terminal with `ir`" => {
                 self.show_terminal = true;
@@ -533,6 +833,10 @@ impl ArcadeShell {
                 self.active_help_section = HelpSection::IrDocs;
                 self.show_help_modal = true;
             }
+            "Check for Updates..." => {
+                self.pending_update_check = true;
+                self.show_updater_modal = true;
+            }
             "About ArcadeEdit" => {
                 self.active_help_section = HelpSection::About;
                 self.show_help_modal = true;
@@ -543,6 +847,10 @@ impl ArcadeShell {
             }
             "Find in Document" => {
                 self.open_find();
+            }
+            "Go to Line..." => {
+                self.goto_line_input.clear();
+                self.show_goto_line_modal = true;
             }
             "Replace in Document" => {
                 self.open_replace();
@@ -607,11 +915,28 @@ impl ArcadeShell {
         if index >= self.tabs.len() {
             return;
         }
+        let tab = &self.tabs[index];
+        if tab.history.is_dirty(tab.document.revision()) {
+            self.pending_close_tab = Some(index);
+            return;
+        }
+        self.close_tab_without_prompt(index);
+    }
+
+    fn close_tab_without_prompt(&mut self, index: usize) {
+        self.pending_close_tab = None;
         if self.tabs.len() == 1 {
             let id = self.next_tab_id;
             self.next_tab_id += 1;
             let initial = Document::new("");
-            self.tabs[0] = EditorTab::new(id, "untitled.rs", initial, LanguageId::Rust, None, Vec::new());
+            self.tabs[0] = EditorTab::new(
+                id,
+                "untitled.rs",
+                initial,
+                LanguageId::Rust,
+                None,
+                Vec::new(),
+            );
             self.active_tab_index = 0;
             self.sync_from_active_tab();
             return;
@@ -626,6 +951,28 @@ impl ArcadeShell {
         self.sync_from_active_tab();
     }
 
+    fn confirm_discard_close(&mut self) {
+        if let Some(index) = self.pending_close_tab {
+            self.close_tab_without_prompt(index);
+        }
+    }
+
+    fn confirm_save_close(&mut self) {
+        let Some(index) = self.pending_close_tab else {
+            return;
+        };
+        if index != self.active_tab_index {
+            self.select_tab(index);
+        }
+        self.save_document();
+        if !self.tabs[index]
+            .history
+            .is_dirty(self.tabs[index].document.revision())
+        {
+            self.close_tab_without_prompt(index);
+        }
+    }
+
     /// Opens a new empty untitled document tab.
     pub fn new_tab(&mut self) {
         self.sync_to_active_tab();
@@ -633,7 +980,14 @@ impl ArcadeShell {
         self.next_tab_id += 1;
         let tab_num = self.tabs.len() + 1;
         let title = format!("untitled-{}.rs", tab_num);
-        let tab = EditorTab::new(id, title, Document::new(""), LanguageId::Rust, None, Vec::new());
+        let tab = EditorTab::new(
+            id,
+            title,
+            Document::new(""),
+            LanguageId::Rust,
+            None,
+            Vec::new(),
+        );
         self.tabs.push(tab);
         self.active_tab_index = self.tabs.len() - 1;
         self.sync_from_active_tab();
@@ -655,6 +1009,26 @@ impl ArcadeShell {
         let primary_head = self.selections.primary().head;
         let line_idx = self.document.line_of_byte(primary_head);
         self.editor_scroll_handle.scroll_to_item(line_idx);
+    }
+
+    /// Moves the primary cursor to a one-based line and optional one-based column.
+    pub fn go_to_line(&mut self, line: usize, column: usize) {
+        let rope = self.document.rope();
+        let line_index = line
+            .saturating_sub(1)
+            .min(rope.len_lines().saturating_sub(1));
+        let start_char = rope.line_to_char(line_index);
+        let line_slice = rope.line(line_index);
+        let content_len = line_slice
+            .to_string()
+            .trim_end_matches(['\n', '\r'])
+            .chars()
+            .count();
+        let char_index = start_char + column.saturating_sub(1).min(content_len);
+        let byte_index = rope.char_to_byte(char_index);
+        self.selections = SelectionSet::cursor(ByteOffset(byte_index));
+        self.sync_to_active_tab();
+        self.scroll_cursor_into_view();
     }
 
     /// Opens the in-editor Find bar.
@@ -715,8 +1089,12 @@ impl ArcadeShell {
     /// Replaces the currently active match with the replacement string.
     pub fn replace_current_find_match(&mut self) {
         if let Some(m) = self.find_replace.current_match() {
-            let edit_sels = SelectionSet::from_selections(vec![arcade_core::Selection::new(m.start, m.end)], 0);
-            if let Ok((tx, new_sels)) = self.document.insert_text_at_selections(&edit_sels, &self.find_replace.replacement) {
+            let edit_sels =
+                SelectionSet::from_selections(vec![arcade_core::Selection::new(m.start, m.end)], 0);
+            if let Ok((tx, new_sels)) = self
+                .document
+                .insert_text_at_selections(&edit_sels, &self.find_replace.replacement)
+            {
                 self.history.push(tx);
                 self.selections = new_sels;
                 self.sync_to_active_tab();
@@ -754,7 +1132,10 @@ impl ArcadeShell {
 
     /// Inserts a string at all current cursor positions.
     pub fn insert_text(&mut self, text: &str) {
-        if let Ok((tx, new_sels)) = self.document.insert_text_at_selections(&self.selections, text) {
+        if let Ok((tx, new_sels)) = self
+            .document
+            .insert_text_at_selections(&self.selections, text)
+        {
             self.history.push(tx);
             self.selections = new_sels;
             self.sync_to_active_tab();
@@ -762,9 +1143,36 @@ impl ArcadeShell {
         }
     }
 
+    fn selected_text(&self) -> Option<String> {
+        let selected = self
+            .selections
+            .as_slice()
+            .iter()
+            .filter(|selection| !selection.is_empty())
+            .map(|selection| {
+                self.document
+                    .rope()
+                    .byte_slice(selection.range().start.0..selection.range().end.0)
+                    .to_string()
+            })
+            .collect::<Vec<_>>();
+        (!selected.is_empty()).then(|| selected.join("\n"))
+    }
+
+    fn copy_selection(&self, cx: &mut Context<Self>) -> bool {
+        let Some(text) = self.selected_text() else {
+            return false;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        true
+    }
+
     /// Deletes backward (Backspace) across all current cursor selections.
     pub fn delete_backward(&mut self) {
-        if let Ok((tx, new_sels)) = self.document.delete_backward_at_selections(&self.selections) {
+        if let Ok((tx, new_sels)) = self
+            .document
+            .delete_backward_at_selections(&self.selections)
+        {
             self.history.push(tx);
             self.selections = new_sels;
             self.sync_to_active_tab();
@@ -785,7 +1193,10 @@ impl ArcadeShell {
     /// Selects the entire document content.
     pub fn select_all(&mut self) {
         let total_bytes = self.document.len_bytes();
-        self.selections = SelectionSet::single(arcade_core::Selection::new(ByteOffset(0), ByteOffset(total_bytes)));
+        self.selections = SelectionSet::single(arcade_core::Selection::new(
+            ByteOffset(0),
+            ByteOffset(total_bytes),
+        ));
         self.sync_to_active_tab();
     }
 
@@ -822,17 +1233,83 @@ pub fn resolve_input_character(event: &gpui::KeyDownEvent) -> Option<String> {
     // 1. Direct mappings for non-character key names emitted by GPUI
     match key {
         "space" => return Some(" ".to_string()),
-        "minus" | "hyphen" => return Some(if shift { "_".to_string() } else { "-".to_string() }),
-        "equal" | "equals" => return Some(if shift { "+".to_string() } else { "=".to_string() }),
-        "comma" => return Some(if shift { "<".to_string() } else { ",".to_string() }),
-        "period" => return Some(if shift { ">".to_string() } else { ".".to_string() }),
-        "slash" => return Some(if shift { "?".to_string() } else { "/".to_string() }),
-        "backslash" => return Some(if shift { "|".to_string() } else { "\\".to_string() }),
-        "semicolon" => return Some(if shift { ":".to_string() } else { ";".to_string() }),
-        "quote" => return Some(if shift { "\"".to_string() } else { "'".to_string() }),
-        "backquote" | "grave" => return Some(if shift { "~".to_string() } else { "`".to_string() }),
-        "bracketleft" => return Some(if shift { "{".to_string() } else { "[".to_string() }),
-        "bracketright" => return Some(if shift { "}".to_string() } else { "]".to_string() }),
+        "minus" | "hyphen" => {
+            return Some(if shift {
+                "_".to_string()
+            } else {
+                "-".to_string()
+            })
+        }
+        "equal" | "equals" => {
+            return Some(if shift {
+                "+".to_string()
+            } else {
+                "=".to_string()
+            })
+        }
+        "comma" => {
+            return Some(if shift {
+                "<".to_string()
+            } else {
+                ",".to_string()
+            })
+        }
+        "period" => {
+            return Some(if shift {
+                ">".to_string()
+            } else {
+                ".".to_string()
+            })
+        }
+        "slash" => {
+            return Some(if shift {
+                "?".to_string()
+            } else {
+                "/".to_string()
+            })
+        }
+        "backslash" => {
+            return Some(if shift {
+                "|".to_string()
+            } else {
+                "\\".to_string()
+            })
+        }
+        "semicolon" => {
+            return Some(if shift {
+                ":".to_string()
+            } else {
+                ";".to_string()
+            })
+        }
+        "quote" => {
+            return Some(if shift {
+                "\"".to_string()
+            } else {
+                "'".to_string()
+            })
+        }
+        "backquote" | "grave" => {
+            return Some(if shift {
+                "~".to_string()
+            } else {
+                "`".to_string()
+            })
+        }
+        "bracketleft" => {
+            return Some(if shift {
+                "{".to_string()
+            } else {
+                "[".to_string()
+            })
+        }
+        "bracketright" => {
+            return Some(if shift {
+                "}".to_string()
+            } else {
+                "]".to_string()
+            })
+        }
         // Number row symbols with Shift
         "1" if shift => return Some("!".to_string()),
         "2" if shift => return Some("@".to_string()),
@@ -869,6 +1346,25 @@ pub fn resolve_input_character(event: &gpui::KeyDownEvent) -> Option<String> {
 
 impl Render for ArcadeShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        window.on_window_should_close(cx, |window, cx| {
+            let Some(shell) = window.root::<ArcadeShell>().flatten() else {
+                return true;
+            };
+            let dirty = shell
+                .read(cx)
+                .tabs
+                .iter()
+                .any(|tab| tab.history.is_dirty(tab.document.revision()));
+            if dirty {
+                shell.update(cx, |shell, cx| {
+                    shell.pending_window_close = true;
+                    cx.notify();
+                });
+                false
+            } else {
+                true
+            }
+        });
         if let Some(worker) = &self.highlight_worker {
             while let Some(res) = worker.try_recv_response() {
                 if res.revision == self.document.revision() {
@@ -901,6 +1397,11 @@ impl Render for ArcadeShell {
         let show_sidebar = self.show_sidebar;
         let show_terminal = self.show_terminal;
         let show_help_modal = self.show_help_modal;
+        let show_preview_modal = self.show_preview_modal;
+        let show_updater_modal = self.show_updater_modal;
+        let show_goto_line_modal = self.show_goto_line_modal;
+        let goto_line_input = self.goto_line_input.clone();
+        let update_state = self.update_state.clone();
         let active_help_section = self.active_help_section;
         let query = &self.command_query;
         let commands = &self.commands;
@@ -932,7 +1433,13 @@ impl Render for ArcadeShell {
             .as_ref()
             .and_then(|p| p.file_name())
             .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_else(|| "ArcadeEdit".to_string());
+            .unwrap_or_else(|| "No Workspace".to_string());
+        let line_ending_label = self
+            .tabs
+            .get(self.active_tab_index)
+            .map(|tab| tab.line_ending_label.as_str())
+            .unwrap_or("LF (default)");
+        let pending_close_tab = self.pending_close_tab;
 
         div()
             .size_full()
@@ -955,6 +1462,50 @@ impl Render for ArcadeShell {
                         cx.notify();
                         return;
                     }
+                    return;
+                }
+                if this.pending_window_close {
+                    if key == "escape" {
+                        this.pending_window_close = false;
+                        cx.notify();
+                    }
+                    return;
+                }
+                if this.show_preview_modal {
+                    if key == "escape" {
+                        this.show_preview_modal = false;
+                        cx.notify();
+                    }
+                    return;
+                }
+                if this.show_updater_modal {
+                    if key == "escape"
+                        && !matches!(
+                            this.update_state,
+                            UpdateState::Downloading(_) | UpdateState::Restarting(_)
+                        )
+                    {
+                        this.show_updater_modal = false;
+                        cx.notify();
+                    }
+                    return;
+                }
+                if this.show_goto_line_modal {
+                    if key == "escape" {
+                        this.show_goto_line_modal = false;
+                    } else if key == "backspace" {
+                        this.goto_line_input.pop();
+                    } else if key == "enter" {
+                        if let Some((line, column)) = parse_line_column(&this.goto_line_input) {
+                            this.go_to_line(line, column);
+                            this.show_goto_line_modal = false;
+                        }
+                    } else if let Some(ch) = resolve_input_character(event) {
+                        if ch.chars().all(|c| c.is_ascii_digit() || c == ':') {
+                            this.goto_line_input.push_str(&ch);
+                        }
+                    }
+                    cx.notify();
                     return;
                 }
                 // When Command Palette is visible, keyboard routes to palette navigation and search:
@@ -981,6 +1532,7 @@ impl Render for ArcadeShell {
                     }
                     if key == "enter" {
                         this.execute_selected_command();
+                        this.start_pending_update_check(cx);
                         cx.notify();
                         return;
                     }
@@ -1095,13 +1647,16 @@ impl Render for ArcadeShell {
 
                 // When Terminal is open and focused, route keys to terminal session
                 if this.show_terminal && this.terminal_focused {
-                    if key == "escape" {
+                    if key == "escape" && this.terminal.active_session.is_none() {
                         this.terminal_focused = false;
                         cx.notify();
                         return;
                     }
                     let typed_char = resolve_input_character(event);
-                    if this.terminal.handle_key(key, ctrl, typed_char.as_deref()) {
+                    if this.terminal.handle_key(key, ctrl, shift, typed_char.as_deref()) {
+                        if this.terminal.has_pending_commands() {
+                            poll_terminal_commands(cx);
+                        }
                         if !this.terminal.is_open {
                             this.show_terminal = false;
                             this.terminal_focused = false;
@@ -1118,6 +1673,31 @@ impl Render for ArcadeShell {
                 }
 
                 // Normal Editor Keyboard Shortcuts:
+                if ctrl && key == "g" {
+                    this.goto_line_input.clear();
+                    this.show_goto_line_modal = true;
+                    cx.notify();
+                    return;
+                }
+                if ctrl && key == "c" {
+                    this.copy_selection(cx);
+                    cx.notify();
+                    return;
+                }
+                if ctrl && key == "x" {
+                    if this.copy_selection(cx) {
+                        this.delete_backward();
+                        cx.notify();
+                    }
+                    return;
+                }
+                if ctrl && key == "v" {
+                    if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+                        this.insert_text(&text);
+                        cx.notify();
+                    }
+                    return;
+                }
                 // Find in Document (Ctrl+F)
                 if ctrl && key == "f" {
                     this.open_find();
@@ -1154,6 +1734,11 @@ impl Render for ArcadeShell {
                 }
 
                 // Save Document (Ctrl+S)
+                if ctrl && shift && key == "s" {
+                    this.save_document_as();
+                    cx.notify();
+                    return;
+                }
                 if ctrl && key == "s" {
                     this.save_document();
                     cx.notify();
@@ -1285,7 +1870,12 @@ impl Render for ArcadeShell {
 
                 // Enter / Return
                 if key == "enter" {
-                    this.insert_text("\n");
+                    let newline = this
+                        .tabs
+                        .get(this.active_tab_index)
+                        .map(|tab| tab.line_ending.clone())
+                        .unwrap_or_else(|| "\n".into());
+                    this.insert_text(&newline);
                     this.scroll_cursor_into_view();
                     cx.notify();
                     return;
@@ -1448,7 +2038,7 @@ impl Render for ArcadeShell {
                                     .border_color(theme.border_subtle)
                                     .text_size(px(11.0))
                                     .text_color(theme.syntax_yellow)
-                                    .child(" master"),
+                                    .child(workspace_title.clone()),
                             )
                             .child(
                                 div()
@@ -1624,7 +2214,7 @@ impl Render for ArcadeShell {
                                             div()
                                                 .text_size(px(11.0))
                                                 .text_color(theme.syntax_cyan)
-                                                .child(workspace_title),
+                                                .child(workspace_title.clone()),
                                         ),
                                 )
                                 // File Tree & Workspace Actions
@@ -1660,7 +2250,11 @@ impl Render for ArcadeShell {
                                         .when(self.workspace_root.is_some(), |el| {
                                             let root = self.workspace_root.as_ref().unwrap();
                                             let current_opt = self.current_file_path.clone();
-                                            let visible_items = build_visible_tree(root, &self.expanded_folders);
+                                            let visible_items = build_visible_tree(
+                                                root,
+                                                &self.expanded_folders,
+                                                &self.workspace_files,
+                                            );
 
                                             let tree_nodes: Vec<_> = visible_items.into_iter().map(|item| {
                                                 let is_active = !item.is_dir && (current_opt.as_ref() == Some(&item.path));
@@ -1763,128 +2357,13 @@ impl Render for ArcadeShell {
                                         .when(self.workspace_root.is_none(), |el| {
                                             el.child(
                                                 div()
+                                                    .p_3()
                                                     .flex()
-                                                    .items_center()
+                                                    .flex_col()
                                                     .gap_2()
-                                                    .px_2()
-                                                    .py_1()
-                                                    .text_color(theme.syntax_yellow)
-                                                    .child("▾ 📁 crates"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .pl_5()
-                                                    .py_1()
-                                                    .text_color(theme.syntax_yellow)
-                                                    .child("▾ 📁 arcade-core"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .pl_8()
-                                                    .py_1()
-                                                    .rounded_lg()
-                                                    .bg(theme.bg_active_glass)
-                                                    .border_1()
-                                                    .border_color(theme.border_glass)
-                                                    .text_color(theme.syntax_cyan)
-                                                    .font_weight(gpui::FontWeight::MEDIUM)
-                                                    .cursor_pointer()
-                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                                        this.select_tab(0);
-                                                        cx.notify();
-                                                    }))
-                                                    .child("🦀 buffer.rs"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .pl_8()
-                                                    .py_1()
-                                                    .text_color(theme.text_secondary)
-                                                    .hover(|s| s.bg(theme.bg_hover_glass))
-                                                    .cursor_pointer()
-                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                                        let p = PathBuf::from("crates/arcade-ui/src/lib.rs");
-                                                        if p.exists() {
-                                                            let _ = this.open_file(p);
-                                                        } else {
-                                                            this.select_tab(0);
-                                                        }
-                                                        cx.notify();
-                                                    }))
-                                                    .child("🦀 lib.rs"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .pl_5()
-                                                    .py_1()
+                                                    .text_size(px(11.5))
                                                     .text_color(theme.text_muted)
-                                                    .hover(|s| s.bg(theme.bg_hover_glass))
-                                                    .child("▸ 📁 arcade-ui"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .pl_5()
-                                                    .py_1()
-                                                    .text_color(theme.text_muted)
-                                                    .hover(|s| s.bg(theme.bg_hover_glass))
-                                                    .child("▸ 📁 arcade-desktop"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .px_2()
-                                                    .py_1()
-                                                    .text_color(theme.text_secondary)
-                                                    .hover(|s| s.bg(theme.bg_hover_glass))
-                                                    .cursor_pointer()
-                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                                        let p = PathBuf::from("Cargo.toml");
-                                                        if p.exists() {
-                                                            let _ = this.open_file(p);
-                                                        } else {
-                                                            this.select_tab(2);
-                                                        }
-                                                        cx.notify();
-                                                    }))
-                                                    .child("⚙️ Cargo.toml"),
-                                            )
-                                            .child(
-                                                div()
-                                                    .flex()
-                                                    .items_center()
-                                                    .gap_2()
-                                                    .px_2()
-                                                    .py_1()
-                                                    .text_color(theme.text_secondary)
-                                                    .hover(|s| s.bg(theme.bg_hover_glass))
-                                                    .cursor_pointer()
-                                                    .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                                        let p = PathBuf::from("README.md");
-                                                        if p.exists() {
-                                                            let _ = this.open_file(p);
-                                                        } else {
-                                                            this.select_tab(1);
-                                                        }
-                                                        cx.notify();
-                                                    }))
-                                                    .child("📄 README.md"),
+                                                    .child("Open a workspace folder to browse its files."),
                                             )
                                         }),
                                 ),
@@ -1908,6 +2387,7 @@ impl Render for ArcadeShell {
                                 &self.document,
                                 &self.selections,
                                 &active_filename,
+                                &workspace_title,
                                 &self.highlight_spans,
                                 &self.find_replace.matches,
                                 self.find_replace.current_match(),
@@ -1971,7 +2451,7 @@ impl Render for ArcadeShell {
                                         this.toggle_command_palette();
                                         cx.notify();
                                     }))
-                                    .child("NORMAL"),
+                                    .child("EDIT"),
                             )
                             .child({
                                 let lang_label = match self.language {
@@ -1984,7 +2464,7 @@ impl Render for ArcadeShell {
                                 };
                                 div()
                                     .text_color(theme.text_muted)
-                                    .child(format!("UTF-8  •  LF  •  {}", lang_label))
+                                    .child(format!("UTF-8  •  {}  •  {}", line_ending_label, lang_label))
                             })
                             .child(
                                 div()
@@ -2039,11 +2519,6 @@ impl Render for ArcadeShell {
                             )
                             .child(
                                 div()
-                                    .text_color(theme.text_muted)
-                                    .child("Spaces: 4"),
-                            )
-                            .child(
-                                div()
                                     .text_color(theme.syntax_green)
                                     .cursor_pointer()
                                     .hover(|s| s.text_color(theme.syntax_cyan))
@@ -2067,7 +2542,528 @@ impl Render for ArcadeShell {
             .when(show_help_modal, |parent| {
                 parent.child(render_help_modal(active_help_section, &theme, cx))
             })
+            .when(show_preview_modal, |parent| {
+                parent.child(render_document_preview(&self.document.to_string(), &theme, cx))
+            })
+            .when(show_updater_modal, |parent| {
+                parent.child(render_updater_modal(&update_state, &theme, cx))
+            })
+            .when(show_goto_line_modal, |parent| {
+                parent.child(render_goto_line_modal(&goto_line_input, &theme))
+            })
+            .when_some(pending_close_tab, |parent, tab_index| {
+                parent.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .bg(gpui::rgba(0x001018a0))
+                        .flex()
+                        .justify_center()
+                        .items_center()
+                        .child(
+                            div()
+                                .w(px(420.0))
+                                .p_5()
+                                .rounded_xl()
+                                .bg(theme.bg_card_glass)
+                                .border_1()
+                                .border_color(theme.border_glass)
+                                .flex()
+                                .flex_col()
+                                .gap_4()
+                                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                .child(div().text_color(theme.text_bright).child("Save changes before closing this tab?"))
+                                .child(
+                                    div()
+                                        .flex()
+                                        .justify_end()
+                                        .gap_2()
+                                        .child(close_prompt_button("Cancel", ClosePromptAction::Cancel, &theme, cx))
+                                        .child(close_prompt_button("Discard", ClosePromptAction::Discard(tab_index), &theme, cx))
+                                        .child(close_prompt_button("Save", ClosePromptAction::Save(tab_index), &theme, cx)),
+                                ),
+                        ),
+                )
+            })
+            .when(self.pending_window_close, |parent| {
+                parent.child(render_window_close_prompt(&theme, cx))
+            })
     }
+}
+
+fn parse_line_column(input: &str) -> Option<(usize, usize)> {
+    let mut parts = input.split(':');
+    let line = parts.next()?.parse::<usize>().ok()?;
+    let column = parts
+        .next()
+        .map(str::parse::<usize>)
+        .transpose()
+        .ok()?
+        .unwrap_or(1);
+    if parts.next().is_some() || line == 0 || column == 0 {
+        return None;
+    }
+    Some((line, column))
+}
+
+fn render_goto_line_modal(input: &str, theme: &SolarizedTheme) -> impl IntoElement {
+    div()
+        .absolute()
+        .inset_0()
+        .bg(gpui::rgba(0x001018a0))
+        .flex()
+        .justify_center()
+        .items_center()
+        .child(
+            div()
+                .w(px(400.0))
+                .p_5()
+                .rounded_xl()
+                .bg(theme.bg_card_glass)
+                .border_1()
+                .border_color(theme.border_glass)
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(div().text_color(theme.text_bright).child("Go to Line"))
+                .child(
+                    div()
+                        .px_3()
+                        .py_2()
+                        .rounded_lg()
+                        .bg(theme.bg_surface_glass)
+                        .text_color(theme.syntax_cyan)
+                        .child(if input.is_empty() {
+                            "Line or line:column (for example 24:8)".to_string()
+                        } else {
+                            input.to_string()
+                        }),
+                )
+                .child(
+                    div()
+                        .text_size(px(11.0))
+                        .text_color(theme.text_muted)
+                        .child("Enter to move · Esc to cancel"),
+                ),
+        )
+}
+
+fn render_window_close_prompt(
+    theme: &SolarizedTheme,
+    cx: &mut Context<ArcadeShell>,
+) -> impl IntoElement {
+    div()
+        .absolute()
+        .inset_0()
+        .bg(gpui::rgba(0x001018a0))
+        .flex()
+        .justify_center()
+        .items_center()
+        .child(
+            div()
+                .w(px(460.0))
+                .p_5()
+                .rounded_xl()
+                .bg(theme.bg_card_glass)
+                .border_1()
+                .border_color(theme.border_glass)
+                .flex()
+                .flex_col()
+                .gap_4()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .text_color(theme.text_bright)
+                        .child("Save changes before closing ArcadeEdit?"),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .justify_end()
+                        .gap_2()
+                        .child(window_close_button("Cancel", false, false, theme, cx))
+                        .child(window_close_button("Discard", true, false, theme, cx))
+                        .child(window_close_button("Save All", false, true, theme, cx)),
+                ),
+        )
+}
+
+fn window_close_button(
+    label: &'static str,
+    discard: bool,
+    save: bool,
+    theme: &SolarizedTheme,
+    cx: &mut Context<ArcadeShell>,
+) -> impl IntoElement {
+    div()
+        .px_3()
+        .py_2()
+        .rounded_lg()
+        .bg(theme.bg_surface_glass)
+        .border_1()
+        .border_color(theme.border_glass)
+        .text_color(theme.text_bright)
+        .cursor_pointer()
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                this.pending_window_close = false;
+                if discard {
+                    cx.quit();
+                } else if save {
+                    this.save_all_and_quit(cx);
+                }
+                cx.notify();
+            }),
+        )
+        .child(label)
+}
+
+#[derive(Clone, Copy)]
+enum UpdaterModalAction {
+    Install,
+    CheckAgain,
+    Close,
+}
+
+fn updater_modal_button(
+    label: &'static str,
+    action: UpdaterModalAction,
+    theme: &SolarizedTheme,
+    cx: &mut Context<ArcadeShell>,
+) -> impl IntoElement {
+    div()
+        .px_3()
+        .py_2()
+        .rounded_lg()
+        .bg(theme.bg_surface_glass)
+        .border_1()
+        .border_color(theme.border_glass)
+        .text_color(theme.text_bright)
+        .cursor_pointer()
+        .hover(|style| style.bg(theme.bg_hover_glass))
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                match action {
+                    UpdaterModalAction::Install => this.install_update(cx),
+                    UpdaterModalAction::CheckAgain => this.check_for_updates(cx, true),
+                    UpdaterModalAction::Close => this.show_updater_modal = false,
+                }
+                cx.notify();
+            }),
+        )
+        .child(label)
+}
+
+fn render_updater_modal(
+    state: &UpdateState,
+    theme: &SolarizedTheme,
+    cx: &mut Context<ArcadeShell>,
+) -> impl IntoElement {
+    let (title, message, notes) = match state {
+        UpdateState::Idle => (
+            "ArcadeEdit Updates",
+            "No update check has run yet.".to_string(),
+            None,
+        ),
+        UpdateState::Checking => (
+            "Checking for Updates",
+            "Contacting GitHub Releases…".to_string(),
+            None,
+        ),
+        UpdateState::UpToDate => (
+            "ArcadeEdit is Up to Date",
+            format!("You are running v{}.", env!("CARGO_PKG_VERSION")),
+            None,
+        ),
+        UpdateState::Available(update) => (
+            "Update Available",
+            format!("ArcadeEdit v{} is ready to install.", update.version),
+            Some(update.notes.chars().take(4_000).collect::<String>()),
+        ),
+        UpdateState::Downloading(version) => (
+            "Installing Update",
+            format!(
+                "Downloading and verifying v{version}. The app will restart when it is staged."
+            ),
+            None,
+        ),
+        UpdateState::Restarting(version) => (
+            "Restarting ArcadeEdit",
+            format!("The verified v{version} update is staged."),
+            None,
+        ),
+        UpdateState::Failed(error) => ("Update Check Failed", error.clone(), None),
+    };
+    let installing = matches!(
+        state,
+        UpdateState::Downloading(_) | UpdateState::Restarting(_)
+    );
+
+    div()
+        .absolute()
+        .inset_0()
+        .bg(gpui::rgba(0x001018a0))
+        .flex()
+        .justify_center()
+        .items_center()
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                if !matches!(
+                    this.update_state,
+                    UpdateState::Downloading(_) | UpdateState::Restarting(_)
+                ) {
+                    this.show_updater_modal = false;
+                    cx.notify();
+                }
+            }),
+        )
+        .child(
+            div()
+                .w(px(520.0))
+                .max_w(px(760.0))
+                .max_h(px(600.0))
+                .rounded_2xl()
+                .bg(theme.bg_card_glass)
+                .border_1()
+                .border_color(theme.border_glass)
+                .shadow_xl()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .px_5()
+                        .py_4()
+                        .border_b_1()
+                        .border_color(theme.border_subtle)
+                        .text_color(theme.text_bright)
+                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .p_5()
+                        .flex()
+                        .flex_col()
+                        .gap_3()
+                        .text_color(theme.text_primary)
+                        .child(message)
+                        .when_some(notes, |view, notes| {
+                            if notes.trim().is_empty() {
+                                view
+                            } else {
+                                view.child(
+                                    div()
+                                        .id("updater-release-notes")
+                                        .max_h(px(300.0))
+                                        .overflow_y_scroll()
+                                        .p_3()
+                                        .rounded_lg()
+                                        .bg(theme.bg_surface_glass)
+                                        .text_color(theme.text_secondary)
+                                        .child(notes),
+                                )
+                            }
+                        })
+                        .child(
+                            div()
+                                .flex()
+                                .justify_end()
+                                .gap_2()
+                                .when(matches!(state, UpdateState::Available(_)), |buttons| {
+                                    buttons
+                                        .child(updater_modal_button(
+                                            "Later",
+                                            UpdaterModalAction::Close,
+                                            theme,
+                                            cx,
+                                        ))
+                                        .child(updater_modal_button(
+                                            "Update and Restart",
+                                            UpdaterModalAction::Install,
+                                            theme,
+                                            cx,
+                                        ))
+                                })
+                                .when(
+                                    matches!(state, UpdateState::Failed(_) | UpdateState::UpToDate),
+                                    |buttons| {
+                                        buttons
+                                            .child(updater_modal_button(
+                                                "Check Again",
+                                                UpdaterModalAction::CheckAgain,
+                                                theme,
+                                                cx,
+                                            ))
+                                            .child(updater_modal_button(
+                                                "Close",
+                                                UpdaterModalAction::Close,
+                                                theme,
+                                                cx,
+                                            ))
+                                    },
+                                )
+                                .when(
+                                    !matches!(
+                                        state,
+                                        UpdateState::Available(_)
+                                            | UpdateState::Failed(_)
+                                            | UpdateState::UpToDate
+                                    ) && !installing,
+                                    |buttons| {
+                                        buttons.child(updater_modal_button(
+                                            "Close",
+                                            UpdaterModalAction::Close,
+                                            theme,
+                                            cx,
+                                        ))
+                                    },
+                                ),
+                        ),
+                ),
+        )
+}
+
+fn render_document_preview(
+    contents: &str,
+    theme: &SolarizedTheme,
+    cx: &mut Context<ArcadeShell>,
+) -> impl IntoElement {
+    let line_count = contents.lines().count();
+    let char_count = contents.chars().count();
+    div()
+        .absolute()
+        .inset_0()
+        .bg(gpui::rgba(0x001018a0))
+        .flex()
+        .justify_center()
+        .items_center()
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.show_preview_modal = false;
+                cx.notify();
+            }),
+        )
+        .child(
+            div()
+                .w(px(900.0))
+                .max_w(px(1100.0))
+                .h(px(600.0))
+                .rounded_2xl()
+                .bg(theme.bg_card_glass)
+                .border_1()
+                .border_color(theme.border_glass)
+                .shadow_xl()
+                .flex()
+                .flex_col()
+                .overflow_hidden()
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .h(px(44.0))
+                        .px_4()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .bg(theme.bg_surface_glass)
+                        .border_b_1()
+                        .border_color(theme.border_subtle)
+                        .child(
+                            div()
+                                .text_color(theme.text_bright)
+                                .child("Document Preview"),
+                        )
+                        .child(div().text_color(theme.text_muted).child(format!(
+                            "{line_count} lines  ·  {char_count} characters  ·  Read only"
+                        ))),
+                )
+                .child(
+                    div()
+                        .id("document-preview-scroll")
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_y_scroll()
+                        .p_4()
+                        .font_family(
+                            "Consolas, 'Cascadia Code', 'Fira Code', 'Courier New', monospace",
+                        )
+                        .text_size(px(12.5))
+                        .text_color(theme.text_primary)
+                        .child(if contents.is_empty() {
+                            "(Empty document)".to_string()
+                        } else {
+                            contents.to_string()
+                        }),
+                ),
+        )
+}
+
+fn poll_terminal_commands(cx: &mut Context<ArcadeShell>) {
+    cx.spawn(async move |this, cx| loop {
+        cx.background_executor()
+            .timer(std::time::Duration::from_millis(40))
+            .await;
+        let keep_polling = this
+            .update(cx, |this, cx| {
+                let changed = this.terminal.poll_active_session();
+                if changed {
+                    cx.notify();
+                }
+                this.terminal.has_pending_commands()
+            })
+            .unwrap_or(false);
+        if !keep_polling {
+            break;
+        }
+    })
+    .detach();
+}
+
+#[derive(Clone, Copy)]
+enum ClosePromptAction {
+    Cancel,
+    Discard(usize),
+    Save(usize),
+}
+
+fn close_prompt_button(
+    label: &'static str,
+    action: ClosePromptAction,
+    theme: &SolarizedTheme,
+    cx: &mut Context<ArcadeShell>,
+) -> impl IntoElement {
+    div()
+        .px_3()
+        .py_1()
+        .rounded_md()
+        .bg(theme.badge_bg)
+        .border_1()
+        .border_color(theme.border_subtle)
+        .text_color(theme.text_bright)
+        .cursor_pointer()
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(move |this, _, _, cx| {
+                match action {
+                    ClosePromptAction::Cancel => this.pending_close_tab = None,
+                    ClosePromptAction::Discard(index) => {
+                        this.pending_close_tab = Some(index);
+                        this.confirm_discard_close();
+                    }
+                    ClosePromptAction::Save(index) => {
+                        this.pending_close_tab = Some(index);
+                        this.confirm_save_close();
+                    }
+                }
+                cx.notify();
+            }),
+        )
+        .child(label)
 }
 
 #[cfg(test)]
@@ -2075,24 +3071,62 @@ mod tests {
     use super::*;
 
     #[test]
+    fn parses_line_and_optional_column() {
+        assert_eq!(parse_line_column("24"), Some((24, 1)));
+        assert_eq!(parse_line_column("24:8"), Some((24, 8)));
+        assert_eq!(parse_line_column("0"), None);
+        assert_eq!(parse_line_column("2:0"), None);
+        assert_eq!(parse_line_column("2:3:4"), None);
+    }
+
+    #[test]
+    fn go_to_line_clamps_to_document_line_and_column() {
+        let mut shell = ArcadeShell::test_stub();
+        shell.document = Document::new("one\ntwo\n");
+        shell.go_to_line(9, 99);
+        assert_eq!(
+            shell.document.line_of_byte(shell.selections.primary().head),
+            2
+        );
+        assert_eq!(
+            shell.selections.primary().head.0,
+            shell.document.rope().len_bytes()
+        );
+    }
+
+    #[test]
     fn initializes_arcade_shell_with_solarized_glass_defaults() {
         let shell = ArcadeShell::test_stub();
         assert_eq!(shell.active_tab, 0);
-        assert!(shell.show_command_palette);
+        assert!(!shell.show_command_palette);
         assert!(!shell.commands.is_empty());
         assert_eq!(DESIGN_SYSTEM_NAME, "ArcadeEdit Solarized Glass");
     }
 
     #[test]
+    fn detects_mixed_newlines_and_uses_the_first_style_for_new_lines() {
+        assert_eq!(
+            detect_line_ending("one\r\ntwo\nthree"),
+            ("\r\n".into(), "Mixed (CRLF + LF)".into())
+        );
+        assert_eq!(
+            detect_line_ending("one\r\ntwo"),
+            ("\r\n".into(), "CRLF".into())
+        );
+        assert_eq!(detect_line_ending("one\ntwo"), ("\n".into(), "LF".into()));
+        assert_eq!(detect_line_ending(""), ("\n".into(), "LF (default)".into()));
+    }
+
+    #[test]
     fn toggles_command_palette_visibility() {
         let mut shell = ArcadeShell::test_stub();
-        assert!(shell.show_command_palette);
-
-        shell.toggle_command_palette();
         assert!(!shell.show_command_palette);
 
         shell.toggle_command_palette();
         assert!(shell.show_command_palette);
+
+        shell.toggle_command_palette();
+        assert!(!shell.show_command_palette);
 
         shell.close_command_palette();
         assert!(!shell.show_command_palette);
@@ -2117,7 +3151,10 @@ mod tests {
         shell.select_tab(0);
         assert_eq!(shell.active_tab, 0);
         assert!(!shell.document.to_string().contains("tab_one"));
-        assert!(shell.document.to_string().contains("ArcadeEdit Test Document"));
+        assert!(shell
+            .document
+            .to_string()
+            .contains("ArcadeEdit Test Document"));
 
         // Switch back to tab 1 and verify content was preserved
         shell.select_tab(1);
@@ -2126,36 +3163,51 @@ mod tests {
 
         // Close tab 1
         shell.close_tab(1);
+        assert_eq!(shell.pending_close_tab, Some(1));
+        shell.confirm_discard_close();
         assert_eq!(shell.tabs.len(), 1);
         assert_eq!(shell.active_tab, 0);
-        assert!(shell.document.to_string().contains("ArcadeEdit Test Document"));
+        assert!(shell
+            .document
+            .to_string()
+            .contains("ArcadeEdit Test Document"));
     }
 
     #[test]
     fn opens_multiple_files_in_tabs_and_deduplicates() {
         let mut shell = ArcadeShell::test_stub();
         let cargo_toml_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-        let lib_rs_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src").join("lib.rs");
+        let lib_rs_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("lib.rs");
 
         // 1. Open Cargo.toml (replaces initial Welcome stub)
-        shell.open_file(cargo_toml_path.clone()).expect("Failed to open Cargo.toml");
+        shell
+            .open_file(cargo_toml_path.clone())
+            .expect("Failed to open Cargo.toml");
         assert_eq!(shell.tabs.len(), 1);
         assert_eq!(shell.active_tab, 0);
         assert_eq!(shell.current_file_path, Some(cargo_toml_path.clone()));
         assert_eq!(shell.language, LanguageId::Toml);
-        assert!(!shell.highlight_spans.is_empty(), "TOML syntax spans should be computed synchronously");
 
         // 2. Open lib.rs in a new tab
-        shell.open_file(lib_rs_path.clone()).expect("Failed to open lib.rs");
+        shell
+            .open_file(lib_rs_path.clone())
+            .expect("Failed to open lib.rs");
         assert_eq!(shell.tabs.len(), 2);
         assert_eq!(shell.active_tab, 1);
         assert_eq!(shell.current_file_path, Some(lib_rs_path.clone()));
         assert_eq!(shell.language, LanguageId::Rust);
-        assert!(!shell.highlight_spans.is_empty(), "Rust syntax spans should be computed synchronously");
 
         // 3. Re-open Cargo.toml (should switch to existing tab at index 0 without duplicating)
-        shell.open_file(cargo_toml_path.clone()).expect("Failed to re-open Cargo.toml");
-        assert_eq!(shell.tabs.len(), 2, "Re-opening existing file must not create a duplicate tab");
+        shell
+            .open_file(cargo_toml_path.clone())
+            .expect("Failed to re-open Cargo.toml");
+        assert_eq!(
+            shell.tabs.len(),
+            2,
+            "Re-opening existing file must not create a duplicate tab"
+        );
         assert_eq!(shell.active_tab, 0);
         assert_eq!(shell.current_file_path, Some(cargo_toml_path));
     }
@@ -2173,6 +3225,20 @@ mod tests {
 
         shell.redo();
         assert_ne!(shell.document.to_string(), initial_text);
+    }
+
+    #[test]
+    fn extracts_selected_text_in_document_order_for_clipboard() {
+        let mut shell = ArcadeShell::test_stub();
+        shell.document = Document::new("alpha beta");
+        shell.selections = SelectionSet::from_selections(
+            vec![
+                arcade_core::Selection::new(ByteOffset(6), ByteOffset(10)),
+                arcade_core::Selection::new(ByteOffset(0), ByteOffset(5)),
+            ],
+            0,
+        );
+        assert_eq!(shell.selected_text().as_deref(), Some("alpha\nbeta"));
     }
 
     #[test]
@@ -2210,11 +3276,19 @@ mod tests {
         assert!(shell.history.is_dirty(shell.document.revision()));
 
         // Find "Save Document" index
-        let save_idx = shell.commands.iter().position(|c| c.title == "Save Document").unwrap();
+        let save_idx = shell
+            .commands
+            .iter()
+            .position(|c| c.title == "Save Document")
+            .unwrap();
+        let save_path =
+            std::env::temp_dir().join(format!("arcade_ui_save_{}.txt", std::process::id()));
+        shell.current_file_path = Some(save_path.clone());
         shell.execute_command_at(save_idx);
 
         assert!(!shell.show_command_palette);
         assert!(!shell.history.is_dirty(shell.document.revision()));
+        let _ = std::fs::remove_file(save_path);
     }
 
     #[test]
@@ -2242,7 +3316,9 @@ mod tests {
         let cargo_toml_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
         assert!(cargo_toml_path.exists());
 
-        shell.open_file(cargo_toml_path.clone()).expect("Failed to open file");
+        shell
+            .open_file(cargo_toml_path.clone())
+            .expect("Failed to open file");
         assert_eq!(shell.current_file_path, Some(cargo_toml_path));
         assert!(shell.document.to_string().contains("[package]"));
         assert!(!shell.history.is_dirty(shell.document.revision()));
@@ -2257,7 +3333,10 @@ mod tests {
         shell.open_folder(manifest_dir.clone());
         assert_eq!(shell.workspace_root, Some(manifest_dir));
         assert!(!shell.workspace_files.is_empty());
-        assert!(shell.workspace_files.iter().any(|f| f.ends_with("Cargo.toml")));
+        assert!(shell
+            .workspace_files
+            .iter()
+            .any(|f| f.ends_with("Cargo.toml")));
         assert!(shell.show_sidebar);
         assert!(shell.current_file_path.is_some());
     }
@@ -2266,37 +3345,50 @@ mod tests {
     fn manages_integrated_terminal_lifecycle_and_commands() {
         let mut terminal = TerminalState::new(PathBuf::from("."));
         assert!(!terminal.lines.is_empty());
-        assert!(terminal.lines.iter().any(|l| l.text.contains("ArcadeEdit Integrated Terminal")));
+        assert!(terminal
+            .lines
+            .iter()
+            .any(|l| l.text.contains("ArcadeEdit Integrated Terminal")));
 
         // Typing into input buffer
-        assert!(terminal.handle_key("h", false, None));
-        assert!(terminal.handle_key("i", false, None));
+        assert!(terminal.handle_key("h", false, false, None));
+        assert!(terminal.handle_key("i", false, false, None));
         assert_eq!(terminal.input_buffer, "hi");
 
         // Typing space and hyphen directly and via character strings
-        assert!(terminal.handle_key("space", false, None));
-        assert!(terminal.handle_key("minus", false, None));
-        assert!(terminal.handle_key("v", false, Some("v")));
+        assert!(terminal.handle_key("space", false, false, None));
+        assert!(terminal.handle_key("minus", false, false, None));
+        assert!(terminal.handle_key("v", false, false, Some("v")));
         assert_eq!(terminal.input_buffer, "hi -v");
 
         // Backspace
-        assert!(terminal.handle_key("backspace", false, None));
+        assert!(terminal.handle_key("backspace", false, false, None));
         assert_eq!(terminal.input_buffer, "hi -");
 
         // Ctrl+C to abort line
-        assert!(terminal.handle_key("c", true, None));
+        assert!(terminal.handle_key("c", true, false, None));
         assert!(terminal.input_buffer.is_empty());
 
         // Echo command
         terminal.execute_command("echo arcade_term_test");
-        assert!(terminal.lines.iter().any(|l| l.text.contains("arcade_term_test")));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while terminal.has_pending_commands() && std::time::Instant::now() < deadline {
+            terminal.poll_active_session();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(terminal.lines.iter().any(|line| {
+            line.kind == TerminalLineKind::Output && line.text.contains("arcade_term_test")
+        }));
 
         // Exit / quit command cleanly closes session
         terminal.is_open = true;
         assert!(terminal.is_open);
         terminal.execute_command("exit");
         assert!(!terminal.is_open);
-        assert!(terminal.lines.iter().any(|l| l.text.contains("[Terminal session closed]")));
+        assert!(terminal
+            .lines
+            .iter()
+            .any(|l| l.text.contains("[Terminal session closed]")));
 
         terminal.is_open = true;
         terminal.execute_command("quit");
@@ -2312,7 +3404,9 @@ mod tests {
         let mut shell = ArcadeShell::test_stub();
         let exe_result = shell.open_file(PathBuf::from("arcade.exe"));
         assert!(exe_result.is_err());
-        assert!(exe_result.unwrap_err().contains("Cannot open binary or executable file"));
+        assert!(exe_result
+            .unwrap_err()
+            .contains("Cannot open binary or executable file"));
 
         let dll_result = shell.open_file(PathBuf::from("library.dll"));
         assert!(dll_result.is_err());
@@ -2326,15 +3420,24 @@ mod tests {
 
         // Switch tabs back and forth
         shell.select_tab(1);
-        assert!(shell.show_terminal, "Terminal must remain open when switching tabs");
+        assert!(
+            shell.show_terminal,
+            "Terminal must remain open when switching tabs"
+        );
         assert!(shell.terminal.is_open);
 
         shell.select_tab(0);
-        assert!(shell.show_terminal, "Terminal must remain open when switching back");
+        assert!(
+            shell.show_terminal,
+            "Terminal must remain open when switching back"
+        );
         assert!(shell.terminal.is_open);
 
         shell.new_tab();
-        assert!(shell.show_terminal, "Terminal must remain open when creating a new tab");
+        assert!(
+            shell.show_terminal,
+            "Terminal must remain open when creating a new tab"
+        );
         assert!(shell.terminal.is_open);
     }
 
@@ -2372,22 +3475,26 @@ mod tests {
         assert!(shell.show_help_modal);
         assert_eq!(shell.active_help_section, HelpSection::About);
 
-        // 4. Headless preview command
-        let prev_idx = shell
+        // Preview is a read-only view of the active buffer.
+        let before = shell.document.to_string();
+        let preview_idx = shell
             .commands
             .iter()
-            .position(|c| c.title == "Arcade Headless: Preview Edits")
-            .expect("Command missing");
-        shell.execute_command_at(prev_idx);
-        assert!(shell.document.to_string().contains("[Arcade Headless Preview:"));
-        assert!(shell.terminal.lines.iter().any(|l| l.text.contains("Headless Inspection:")));
+            .position(|c| c.title == "Preview Current Document")
+            .expect("Preview Current Document command missing");
+        shell.execute_command_at(preview_idx);
+        assert!(shell.show_preview_modal);
+        assert_eq!(shell.document.to_string(), before);
     }
 
     #[test]
     fn resolves_bundled_ir_binary() {
         let resolved = terminal::resolve_ir_binary();
         if cfg!(windows) {
-            assert!(resolved.is_some(), "Bundled ir binary should be resolved in development/workspace on Windows");
+            assert!(
+                resolved.is_some(),
+                "Bundled ir binary should be resolved in development/workspace on Windows"
+            );
             let path = resolved.unwrap();
             assert!(path.exists());
             assert!(path.to_string_lossy().contains("ir"));
@@ -2430,7 +3537,10 @@ mod tests {
 
         // 6. Replace all remaining matches
         shell.replace_all_find_matches();
-        assert_eq!(shell.document.to_string(), "orange banana orange cherry orange");
+        assert_eq!(
+            shell.document.to_string(),
+            "orange banana orange cherry orange"
+        );
         assert_eq!(shell.find_replace.matches.len(), 0);
 
         // 7. Close find bar
@@ -2472,7 +3582,10 @@ mod tests {
 
         // 2. Select All selects full buffer
         shell.select_all();
-        assert_eq!(shell.selections.primary().head, ByteOffset(shell.document.len_bytes()));
+        assert_eq!(
+            shell.selections.primary().head,
+            ByteOffset(shell.document.len_bytes())
+        );
         assert_eq!(shell.selections.primary().anchor, ByteOffset(0));
 
         // 3. Typing over full selection replaces entire text

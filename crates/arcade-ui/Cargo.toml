@@ -16,6 +16,11 @@ gpui.workspace = true
 portable-pty.workspace = true
 vte.workspace = true
 rfd = "0.17.2"
+futures.workspace = true
+serde.workspace = true
+serde_json = "1.0"
+semver = "1.0"
+sha2 = "0.10"
 
 [lints]
 workspace = true

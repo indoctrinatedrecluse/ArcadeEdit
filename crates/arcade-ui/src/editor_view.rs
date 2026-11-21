@@ -73,6 +73,7 @@ pub fn render_live_editor_surface(
     document: &Document,
     selections: &SelectionSet,
     active_filename: &str,
+    workspace_name: &str,
     highlight_spans: &[HighlightSpan],
     find_matches: &[TextRange],
     active_match: Option<TextRange>,
@@ -114,7 +115,11 @@ pub fn render_live_editor_surface(
                 .gap_2()
                 .child(div().text_color(theme.syntax_cyan).child("ArcadeEdit"))
                 .child(div().text_color(theme.text_muted).child("›"))
-                .child(div().text_color(theme.syntax_cyan).child("workspace"))
+                .child(
+                    div()
+                        .text_color(theme.syntax_cyan)
+                        .child(workspace_name.to_string()),
+                )
                 .child(div().text_color(theme.text_muted).child("›"))
                 .child(
                     div()
@@ -314,28 +319,5 @@ pub fn render_live_editor_surface(
                                 })),
                         ),
                 )
-                // Glassy Scroll / Minimap Rail (pinned to the right edge)
-                .child(
-                    div()
-                        .w(px(48.0))
-                        .h_full()
-                        .bg(theme.bg_surface_glass)
-                        .border_l_1()
-                        .border_color(theme.border_subtle)
-                        .p_2()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .child(
-                            div()
-                                .h(px(36.0))
-                                .rounded_md()
-                                .bg(theme.bg_sheen_highlight)
-                                .border_1()
-                                .border_color(theme.border_glass)
-                                .border_t_1()
-                                .border_color(theme.border_specular_top),
-                        ),
-                ),
         )
 }

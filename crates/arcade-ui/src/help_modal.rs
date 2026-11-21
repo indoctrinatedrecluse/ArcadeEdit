@@ -1,7 +1,7 @@
 //! Help Menu and in-app Documentation modal for ArcadeEdit.
 //!
 //! Features a dedicated "ir documentation" section detailing the bundled `ir` CLI companion,
-//! alongside an "About" section specifying application name (ArcadeEdit), version (1.2.1),
+//! alongside an "About" section specifying application name (ArcadeEdit), current package version,
 //! author (indoctrinatedrecluse), system architecture, and keyboard shortcuts.
 
 use crate::theme::SolarizedTheme;
@@ -34,10 +34,13 @@ pub fn render_help_modal(
         .justify_center()
         .items_start()
         .pt(px(50.0))
-        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-            this.show_help_modal = false;
-            cx.notify();
-        }))
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.show_help_modal = false;
+                cx.notify();
+            }),
+        )
         .child(
             // Floating Acrylic Glass Modal Card
             div()
@@ -125,10 +128,13 @@ pub fn render_help_modal(
                                         })
                                         .cursor_pointer()
                                         .hover(|s| s.bg(theme.bg_hover_glass))
-                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                            this.active_help_section = HelpSection::IrDocs;
-                                            cx.notify();
-                                        }))
+                                        .on_mouse_down(
+                                            gpui::MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.active_help_section = HelpSection::IrDocs;
+                                                cx.notify();
+                                            }),
+                                        )
                                         .child("📖 ir documentation"),
                                 )
                                 // Tab 2: About ArcadeEdit
@@ -161,10 +167,13 @@ pub fn render_help_modal(
                                         })
                                         .cursor_pointer()
                                         .hover(|s| s.bg(theme.bg_hover_glass))
-                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                            this.active_help_section = HelpSection::About;
-                                            cx.notify();
-                                        }))
+                                        .on_mouse_down(
+                                            gpui::MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.active_help_section = HelpSection::About;
+                                                cx.notify();
+                                            }),
+                                        )
                                         .child("ℹ️ About"),
                                 )
                                 // Tab 3: Keyboard Shortcuts
@@ -197,10 +206,13 @@ pub fn render_help_modal(
                                         })
                                         .cursor_pointer()
                                         .hover(|s| s.bg(theme.bg_hover_glass))
-                                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                            this.active_help_section = HelpSection::Shortcuts;
-                                            cx.notify();
-                                        }))
+                                        .on_mouse_down(
+                                            gpui::MouseButton::Left,
+                                            cx.listener(|this, _, _, cx| {
+                                                this.active_help_section = HelpSection::Shortcuts;
+                                                cx.notify();
+                                            }),
+                                        )
                                         .child("⌨️ Shortcuts"),
                                 ),
                         )
@@ -216,11 +228,16 @@ pub fn render_help_modal(
                                 .text_size(px(11.0))
                                 .text_color(theme.text_muted)
                                 .cursor_pointer()
-                                .hover(|s| s.text_color(theme.syntax_magenta).bg(theme.bg_hover_glass))
-                                .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                    this.show_help_modal = false;
-                                    cx.notify();
-                                }))
+                                .hover(|s| {
+                                    s.text_color(theme.syntax_magenta).bg(theme.bg_hover_glass)
+                                })
+                                .on_mouse_down(
+                                    gpui::MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        this.show_help_modal = false;
+                                        cx.notify();
+                                    }),
+                                )
                                 .child("ESC ✕"),
                         ),
                 )
@@ -542,14 +559,15 @@ fn render_about_row(theme: &SolarizedTheme, label: &'static str, desc: &'static 
 /// Renders the "Keyboard Shortcuts" section.
 fn render_shortcuts_content(theme: &SolarizedTheme) -> Div {
     let shortcuts = [
-        ("Ctrl + P", "Toggle macOS/MAUI Command Palette modal"),
+        ("Ctrl + P", "Toggle command palette"),
         ("Ctrl + O", "Open native file picker to load document"),
-        ("Ctrl + K  Ctrl + O", "Open native folder picker for project workspace"),
         ("Ctrl + S", "Save active document changes to disk"),
+        ("Ctrl + Shift + S", "Save active document to a chosen path"),
         ("Ctrl + `", "Toggle integrated terminal drawer (`ir` CLI)"),
         ("Ctrl + B", "Toggle workspace file explorer sidebar"),
         ("Ctrl + F", "Open Find in Document search bar"),
         ("Ctrl + H", "Open Find & Replace bar"),
+        ("Ctrl + G", "Go to a line or line and column"),
         ("Ctrl + A", "Select all document contents"),
         ("Ctrl + N", "Open new empty document tab"),
         ("Ctrl + W", "Close active document tab"),
@@ -559,7 +577,10 @@ fn render_shortcuts_content(theme: &SolarizedTheme) -> Div {
         ("Ctrl + Z", "Undo last text editing transaction"),
         ("Ctrl + Y / Ctrl+Shift+Z", "Redo last undone transaction"),
         ("F1", "Open in-app Help menu & documentation modal"),
-        ("ESC", "Dismiss command palette, find bar, help modal, or collapse selections"),
+        (
+            "ESC",
+            "Dismiss command palette, find bar, help modal, or collapse selections",
+        ),
     ];
 
     let rows: Vec<_> = shortcuts
@@ -597,10 +618,5 @@ fn render_shortcuts_content(theme: &SolarizedTheme) -> Div {
         })
         .collect();
 
-    div()
-        .flex()
-        .flex_col()
-        .gap_2()
-        .children(rows)
+    div().flex().flex_col().gap_2().children(rows)
 }
-

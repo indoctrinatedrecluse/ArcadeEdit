@@ -20,7 +20,11 @@ pub fn highlight_markdown(text: &str) -> Vec<HighlightSpan> {
         if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
             in_code_block = !in_code_block;
             if content_end > content_start {
-                spans.push(HighlightSpan::new(content_start, content_end, HighlightKind::Code));
+                spans.push(HighlightSpan::new(
+                    content_start,
+                    content_end,
+                    HighlightKind::Code,
+                ));
             }
             byte_offset += line.len();
             continue;
@@ -28,7 +32,11 @@ pub fn highlight_markdown(text: &str) -> Vec<HighlightSpan> {
 
         if in_code_block {
             if content_end > content_start {
-                spans.push(HighlightSpan::new(content_start, content_end, HighlightKind::Code));
+                spans.push(HighlightSpan::new(
+                    content_start,
+                    content_end,
+                    HighlightKind::Code,
+                ));
             }
             byte_offset += line.len();
             continue;
@@ -37,7 +45,11 @@ pub fn highlight_markdown(text: &str) -> Vec<HighlightSpan> {
         // Headings (#, ##, ###, etc.)
         if trimmed.starts_with('#') {
             if content_end > content_start {
-                spans.push(HighlightSpan::new(content_start, content_end, HighlightKind::Heading));
+                spans.push(HighlightSpan::new(
+                    content_start,
+                    content_end,
+                    HighlightKind::Heading,
+                ));
             }
             byte_offset += line.len();
             continue;
@@ -46,7 +58,11 @@ pub fn highlight_markdown(text: &str) -> Vec<HighlightSpan> {
         // Blockquotes (>)
         if trimmed.starts_with('>') {
             if content_end > content_start {
-                spans.push(HighlightSpan::new(content_start, content_end, HighlightKind::Comment));
+                spans.push(HighlightSpan::new(
+                    content_start,
+                    content_end,
+                    HighlightKind::Comment,
+                ));
             }
             byte_offset += line.len();
             continue;
@@ -54,10 +70,18 @@ pub fn highlight_markdown(text: &str) -> Vec<HighlightSpan> {
 
         // Unordered or ordered list markers (- , * , + , 1. )
         if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("+ ") {
-            spans.push(HighlightSpan::new(content_start, content_start + 2, HighlightKind::Keyword));
+            spans.push(HighlightSpan::new(
+                content_start,
+                content_start + 2,
+                HighlightKind::Keyword,
+            ));
         } else if let Some(dot_pos) = trimmed.find(". ") {
             if trimmed[..dot_pos].chars().all(|c| c.is_ascii_digit()) {
-                spans.push(HighlightSpan::new(content_start, content_start + dot_pos + 2, HighlightKind::Keyword));
+                spans.push(HighlightSpan::new(
+                    content_start,
+                    content_start + dot_pos + 2,
+                    HighlightKind::Keyword,
+                ));
             }
         }
 
@@ -100,4 +124,3 @@ mod tests {
         assert!(spans.iter().any(|s| s.kind == HighlightKind::Code));
     }
 }
-

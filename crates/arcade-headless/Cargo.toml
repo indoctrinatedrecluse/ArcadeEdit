@@ -1,6 +1,6 @@
 [package]
 name = "arcade-headless"
-description = "The display-independent ArcadeEdit CLI and future service host."
+description = "The display-independent ArcadeEdit automation CLI."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -22,5 +22,4 @@ workspace = true
 [[bin]]
 name = "arcade-headless"
 path = "src/main.rs"
-test = false
 

@@ -18,7 +18,11 @@ pub fn highlight_toml(text: &str) -> Vec<HighlightSpan> {
             let comment_start = byte_offset + hash_pos;
             let comment_end = byte_offset + clean.len();
             if comment_end > comment_start {
-                spans.push(HighlightSpan::new(comment_start, comment_end, HighlightKind::Comment));
+                spans.push(HighlightSpan::new(
+                    comment_start,
+                    comment_end,
+                    HighlightKind::Comment,
+                ));
             }
         }
 
@@ -84,12 +88,20 @@ fn scan_toml_value(val_text: &str, base_offset: usize, spans: &mut Vec<Highlight
     if trimmed_val == "true" || trimmed_val == "false" {
         if let Some(pos) = val_text.find(trimmed_val) {
             let start = base_offset + pos;
-            spans.push(HighlightSpan::new(start, start + trimmed_val.len(), HighlightKind::Keyword));
+            spans.push(HighlightSpan::new(
+                start,
+                start + trimmed_val.len(),
+                HighlightKind::Keyword,
+            ));
         }
     } else if trimmed_val.parse::<f64>().is_ok() {
         if let Some(pos) = val_text.find(trimmed_val) {
             let start = base_offset + pos;
-            spans.push(HighlightSpan::new(start, start + trimmed_val.len(), HighlightKind::Number));
+            spans.push(HighlightSpan::new(
+                start,
+                start + trimmed_val.len(),
+                HighlightKind::Number,
+            ));
         }
     }
 }
@@ -107,7 +119,11 @@ pub fn highlight_yaml(text: &str) -> Vec<HighlightSpan> {
         let content = if let Some(hash_pos) = clean.find('#') {
             let comment_start = byte_offset + hash_pos;
             let comment_end = byte_offset + clean.len();
-            spans.push(HighlightSpan::new(comment_start, comment_end, HighlightKind::Comment));
+            spans.push(HighlightSpan::new(
+                comment_start,
+                comment_end,
+                HighlightKind::Comment,
+            ));
             &clean[..hash_pos]
         } else {
             clean
@@ -119,7 +135,11 @@ pub fn highlight_yaml(text: &str) -> Vec<HighlightSpan> {
         // List marker: -
         if trimmed.starts_with("- ") {
             let m_start = byte_offset + leading;
-            spans.push(HighlightSpan::new(m_start, m_start + 1, HighlightKind::Operator));
+            spans.push(HighlightSpan::new(
+                m_start,
+                m_start + 1,
+                HighlightKind::Operator,
+            ));
         }
 
         // Key: Value
@@ -167,15 +187,28 @@ fn scan_yaml_value(val_text: &str, base_offset: usize, spans: &mut Vec<Highlight
     }
 
     let trimmed = val_text.trim();
-    if trimmed == "true" || trimmed == "false" || trimmed == "yes" || trimmed == "no" || trimmed == "null" {
+    if trimmed == "true"
+        || trimmed == "false"
+        || trimmed == "yes"
+        || trimmed == "no"
+        || trimmed == "null"
+    {
         if let Some(pos) = val_text.find(trimmed) {
             let start = base_offset + pos;
-            spans.push(HighlightSpan::new(start, start + trimmed.len(), HighlightKind::Keyword));
+            spans.push(HighlightSpan::new(
+                start,
+                start + trimmed.len(),
+                HighlightKind::Keyword,
+            ));
         }
     } else if trimmed.parse::<f64>().is_ok() {
         if let Some(pos) = val_text.find(trimmed) {
             let start = base_offset + pos;
-            spans.push(HighlightSpan::new(start, start + trimmed.len(), HighlightKind::Number));
+            spans.push(HighlightSpan::new(
+                start,
+                start + trimmed.len(),
+                HighlightKind::Number,
+            ));
         }
     }
 }
@@ -230,8 +263,10 @@ pub fn highlight_json(text: &str) -> Vec<HighlightSpan> {
                 let start_b = byte_offset + actual_idx;
                 let end_b = start_b + word.len();
                 // Check word boundaries
-                let before_ok = actual_idx == 0 || !clean.as_bytes()[actual_idx - 1].is_ascii_alphanumeric();
-                let after_ok = actual_idx + word.len() >= clean.len() || !clean.as_bytes()[actual_idx + word.len()].is_ascii_alphanumeric();
+                let before_ok =
+                    actual_idx == 0 || !clean.as_bytes()[actual_idx - 1].is_ascii_alphanumeric();
+                let after_ok = actual_idx + word.len() >= clean.len()
+                    || !clean.as_bytes()[actual_idx + word.len()].is_ascii_alphanumeric();
                 if before_ok && after_ok {
                     spans.push(HighlightSpan::new(start_b, end_b, HighlightKind::Keyword));
                 }
@@ -279,4 +314,3 @@ mod tests {
         assert!(spans.iter().any(|s| s.kind == HighlightKind::Keyword));
     }
 }
-

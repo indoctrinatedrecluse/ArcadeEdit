@@ -1,8 +1,8 @@
 //! Character and byte-aware cursor and multi-selection primitives.
 
-use std::cmp::{max, min};
 use crate::{ByteOffset, TextRange};
 use ropey::Rope;
+use std::cmp::{max, min};
 
 /// Represents an individual cursor or range selection in a document.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,13 +96,18 @@ impl SelectionSet {
             return Self::new();
         }
 
-        // Sort selections by starting position
-        list.sort_by_key(|s| (s.start(), s.end()));
+        // Keep the original primary marker attached to its selection while sorting.
+        let mut ordered: Vec<_> = list
+            .drain(..)
+            .enumerate()
+            .map(|(idx, selection)| (selection, idx == primary))
+            .collect();
+        ordered.sort_by_key(|(selection, _)| (selection.start(), selection.end()));
 
-        let mut merged: Vec<Selection> = Vec::with_capacity(list.len());
+        let mut merged: Vec<Selection> = Vec::with_capacity(ordered.len());
         let mut new_primary = 0;
 
-        for (idx, sel) in list.into_iter().enumerate() {
+        for (sel, is_primary) in ordered {
             if let Some(last) = merged.last_mut() {
                 // If touching or overlapping, merge them
                 if sel.start() <= last.end() {
@@ -110,7 +115,7 @@ impl SelectionSet {
                     let new_end = max(last.end(), sel.end());
 
                     // Retain direction of the newer/current selection if it was primary
-                    if idx == primary {
+                    if is_primary {
                         *last = if sel.is_forward() {
                             Selection::new(new_start, new_end)
                         } else {
@@ -129,7 +134,7 @@ impl SelectionSet {
                 }
             }
 
-            if idx == primary {
+            if is_primary {
                 new_primary = merged.len();
             }
             merged.push(sel);
@@ -332,14 +337,22 @@ impl SelectionSet {
     /// Moves all cursors to the start of the document.
     pub fn move_to_doc_start(&self, extend: bool) -> Self {
         let new_head = ByteOffset(0);
-        let new_anchor = if extend { self.primary().anchor } else { new_head };
+        let new_anchor = if extend {
+            self.primary().anchor
+        } else {
+            new_head
+        };
         Self::single(Selection::new(new_anchor, new_head))
     }
 
     /// Moves all cursors to the end of the document.
     pub fn move_to_doc_end(&self, rope: &Rope, extend: bool) -> Self {
         let new_head = ByteOffset(rope.len_bytes());
-        let new_anchor = if extend { self.primary().anchor } else { new_head };
+        let new_anchor = if extend {
+            self.primary().anchor
+        } else {
+            new_head
+        };
         Self::single(Selection::new(new_anchor, new_head))
     }
 }
@@ -361,7 +374,10 @@ mod tests {
         assert!(!sel.is_forward());
         assert_eq!(sel.start(), ByteOffset(5));
         assert_eq!(sel.end(), ByteOffset(10));
-        assert_eq!(sel.range(), TextRange::new(ByteOffset(5), ByteOffset(10)).unwrap());
+        assert_eq!(
+            sel.range(),
+            TextRange::new(ByteOffset(5), ByteOffset(10)).unwrap()
+        );
 
         let collapsed = sel.collapse();
         assert!(collapsed.is_empty());
@@ -379,8 +395,30 @@ mod tests {
 
         let set = SelectionSet::from_selections(list, 0);
         assert_eq!(set.len(), 2);
-        assert_eq!(set.as_slice()[0], Selection::new(ByteOffset(0), ByteOffset(10)));
-        assert_eq!(set.as_slice()[1], Selection::new(ByteOffset(15), ByteOffset(20)));
+        assert_eq!(
+            set.as_slice()[0],
+            Selection::new(ByteOffset(0), ByteOffset(10))
+        );
+        assert_eq!(
+            set.as_slice()[1],
+            Selection::new(ByteOffset(15), ByteOffset(20))
+        );
+    }
+
+    #[test]
+    fn preserves_primary_selection_when_normalization_sorts() {
+        let set = SelectionSet::from_selections(
+            vec![
+                Selection::new(ByteOffset(10), ByteOffset(12)),
+                Selection::new(ByteOffset(0), ByteOffset(2)),
+            ],
+            0,
+        );
+        assert_eq!(
+            set.primary(),
+            Selection::new(ByteOffset(10), ByteOffset(12))
+        );
+        assert_eq!(set.primary_index(), 1);
     }
 
     #[test]
@@ -410,4 +448,3 @@ mod tests {
         assert_eq!(line_start.primary().head, ByteOffset(11)); // start of 'second line'
     }
 }
-

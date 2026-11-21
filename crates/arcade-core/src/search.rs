@@ -5,31 +5,41 @@ use crate::selection::SelectionSet;
 use crate::{ByteOffset, Document, EditError, TextEdit, TextRange};
 use ropey::Rope;
 
-/// Finds all exact occurrences of a query string across the entire document rope.
+/// Finds exact, non-overlapping occurrences across the document, including line breaks.
 pub fn find_all(rope: &Rope, query: &str) -> Vec<TextRange> {
     if query.is_empty() {
         return Vec::new();
     }
 
     let mut matches = Vec::new();
-    let query_len_bytes = query.len();
-    let mut current_byte = 0;
-
+    let mut processed_bytes = 0usize;
+    let mut carry = String::new();
     for line in rope.lines() {
-        let line_str = line.to_string();
-        let mut line_offset = 0;
+        let combined_start = processed_bytes.saturating_sub(carry.len());
+        let mut combined = carry;
+        combined.push_str(&line.to_string());
+        let carry_len = combined.len().min(query.len().saturating_sub(1));
+        let mut search_from = 0;
 
-        while let Some(pos) = line_str[line_offset..].find(query) {
-            let match_byte_start = current_byte + line_offset + pos;
-            let match_byte_end = match_byte_start + query_len_bytes;
-
-            if let Ok(range) = TextRange::new(ByteOffset(match_byte_start), ByteOffset(match_byte_end)) {
-                matches.push(range);
+        while let Some(relative_start) = combined[search_from..].find(query) {
+            let start_in_combined = search_from + relative_start;
+            let end_in_combined = start_in_combined + query.len();
+            if end_in_combined > carry_len {
+                let start = combined_start + start_in_combined;
+                let end = start + query.len();
+                if let Ok(range) = TextRange::new(ByteOffset(start), ByteOffset(end)) {
+                    matches.push(range);
+                }
             }
-            line_offset += pos + query_len_bytes;
+            search_from = end_in_combined;
         }
 
-        current_byte += line.len_bytes();
+        processed_bytes += line.len_bytes();
+        let mut carry_start = combined.len().saturating_sub(query.len().saturating_sub(1));
+        while carry_start < combined.len() && !combined.is_char_boundary(carry_start) {
+            carry_start += 1;
+        }
+        carry = combined[carry_start..].to_string();
     }
 
     matches
@@ -137,9 +147,27 @@ mod tests {
         let matches = find_all(&rope, "apple");
 
         assert_eq!(matches.len(), 3);
-        assert_eq!(matches[0], TextRange::new(ByteOffset(0), ByteOffset(5)).unwrap());
-        assert_eq!(matches[1], TextRange::new(ByteOffset(13), ByteOffset(18)).unwrap());
-        assert_eq!(matches[2], TextRange::new(ByteOffset(31), ByteOffset(36)).unwrap());
+        assert_eq!(
+            matches[0],
+            TextRange::new(ByteOffset(0), ByteOffset(5)).unwrap()
+        );
+        assert_eq!(
+            matches[1],
+            TextRange::new(ByteOffset(13), ByteOffset(18)).unwrap()
+        );
+        assert_eq!(
+            matches[2],
+            TextRange::new(ByteOffset(31), ByteOffset(36)).unwrap()
+        );
+    }
+
+    #[test]
+    fn finds_matches_that_cross_line_endings() {
+        let rope = Rope::from_str("alpha\nbeta\r\ngamma");
+        let matches = find_all(&rope, "a\nb");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].start, ByteOffset(4));
+        assert_eq!(matches[0].end, ByteOffset(7));
     }
 
     #[test]
@@ -169,4 +197,3 @@ mod tests {
         assert_eq!(tx.edits.len(), 2);
     }
 }
-

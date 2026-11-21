@@ -52,14 +52,21 @@ pub fn default_commands() -> Vec<CommandItem> {
             "FILE",
             "Open Folder...",
             "Open a folder or project workspace into ArcadeEdit",
-            Some("Ctrl+K Ctrl+O"),
+            None,
             false,
         ),
         CommandItem::new(
             "FILE",
             "Save Document",
-            "Write the current buffer revision to storage",
+            "Save the current document or choose a path for an untitled document",
             Some("Ctrl+S"),
+            false,
+        ),
+        CommandItem::new(
+            "FILE",
+            "Save Document As...",
+            "Choose a file path for the current document",
+            Some("Ctrl+Shift+S"),
             false,
         ),
         CommandItem::new(
@@ -99,6 +106,13 @@ pub fn default_commands() -> Vec<CommandItem> {
         ),
         CommandItem::new(
             "EDIT",
+            "Go to Line...",
+            "Move the cursor to a line and optional column",
+            Some("Ctrl+G"),
+            false,
+        ),
+        CommandItem::new(
+            "EDIT",
             "Replace in Document",
             "Search and replace occurrences across the document",
             Some("Ctrl+H"),
@@ -112,10 +126,10 @@ pub fn default_commands() -> Vec<CommandItem> {
             false,
         ),
         CommandItem::new(
-            "TRANSFORM",
-            "Arcade Headless: Preview Edits",
-            "Execute headless transformation rules in dry-run mode",
-            Some("Ctrl+Shift+P"),
+            "VIEW",
+            "Preview Current Document",
+            "Open a read-only preview of the active document",
+            None,
             false,
         ),
         CommandItem::new(
@@ -128,7 +142,7 @@ pub fn default_commands() -> Vec<CommandItem> {
         CommandItem::new(
             "TERMINAL",
             "Toggle Terminal Maximized",
-            "Expand or restore terminal drawer height (24 rows vs 30 rows)",
+            "Expand or restore terminal drawer height (20 rows vs 30 rows)",
             None,
             false,
         ),
@@ -136,7 +150,7 @@ pub fn default_commands() -> Vec<CommandItem> {
             "THEME",
             "Toggle Solarized Sheen Contrast",
             "Switch between deep acrylic teal and light solarized modes",
-            Some("Ctrl+K Ctrl+T"),
+            None,
             false,
         ),
         CommandItem::new(
@@ -144,6 +158,13 @@ pub fn default_commands() -> Vec<CommandItem> {
             "ir Documentation",
             "Browse reference manual for the bundled `ir` CLI companion utility",
             Some("F1"),
+            false,
+        ),
+        CommandItem::new(
+            "HELP",
+            "Check for Updates...",
+            "Check the latest stable ArcadeEdit release",
+            None,
             false,
         ),
         CommandItem::new(
@@ -235,11 +256,15 @@ pub fn render_command_palette(
             })
             .cursor_pointer()
             .hover(|s| s.bg(theme.bg_hover_glass))
-            .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _, _, cx| {
-                cx.stop_propagation();
-                this.execute_command_at(ix);
-                cx.notify();
-            }))
+            .on_mouse_down(
+                gpui::MouseButton::Left,
+                cx.listener(move |this, _, _, cx| {
+                    cx.stop_propagation();
+                    this.execute_command_at(ix);
+                    this.start_pending_update_check(cx);
+                    cx.notify();
+                }),
+            )
             .child(
                 div()
                     .flex()
@@ -281,9 +306,7 @@ pub fn render_command_palette(
                             ),
                     ),
             )
-            .when_some(item.shortcut, |el, sc| {
-                el.child(render_keycap(theme, sc))
-            });
+            .when_some(item.shortcut, |el, sc| el.child(render_keycap(theme, sc)));
 
         command_items.push(node);
     }
@@ -331,10 +354,13 @@ pub fn render_command_palette(
         .justify_center()
         .items_start()
         .pt(px(72.0))
-        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-            this.close_command_palette();
-            cx.notify();
-        }))
+        .on_mouse_down(
+            gpui::MouseButton::Left,
+            cx.listener(|this, _, _, cx| {
+                this.close_command_palette();
+                cx.notify();
+            }),
+        )
         .child(
             // Floating Acrylic Glass Modal Card
             div()
@@ -354,12 +380,7 @@ pub fn render_command_palette(
                     cx.stop_propagation();
                 })
                 // Top Specular Sheen Stripe
-                .child(
-                    div()
-                        .h(px(1.5))
-                        .w_full()
-                        .bg(theme.border_specular_top),
-                )
+                .child(div().h(px(1.5)).w_full().bg(theme.border_specular_top))
                 // Search Input Header Bar
                 .child(
                     div()
@@ -392,7 +413,8 @@ pub fn render_command_palette(
                                 })
                                 .text_size(px(13.5))
                                 .child(if query_owned.is_empty() {
-                                    "Type a command or search (e.g. 'open', 'terminal', 'theme')".to_string()
+                                    "Type a command or search (e.g. 'open', 'terminal', 'theme')"
+                                        .to_string()
                                 } else {
                                     format!("{}▌", query_owned)
                                 }),
@@ -410,11 +432,14 @@ pub fn render_command_palette(
                                 .text_color(theme.text_secondary)
                                 .cursor_pointer()
                                 .hover(|s| s.bg(theme.bg_hover_glass).text_color(theme.text_bright))
-                                .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _, _, cx| {
-                                    cx.stop_propagation();
-                                    this.close_command_palette();
-                                    cx.notify();
-                                }))
+                                .on_mouse_down(
+                                    gpui::MouseButton::Left,
+                                    cx.listener(|this, _, _, cx| {
+                                        cx.stop_propagation();
+                                        this.close_command_palette();
+                                        cx.notify();
+                                    }),
+                                )
                                 .child("ESC ✕"),
                         ),
                 )
@@ -452,4 +477,3 @@ pub fn render_command_palette(
                 ),
         )
 }
-

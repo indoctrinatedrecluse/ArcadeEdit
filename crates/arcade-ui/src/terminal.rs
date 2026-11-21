@@ -7,7 +7,12 @@ use crate::theme::SolarizedTheme;
 use crate::ArcadeShell;
 use gpui::{div, prelude::*, px, Context, IntoElement};
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Output};
+use std::sync::mpsc::{channel, Receiver, Sender};
+use std::time::{Duration, Instant};
+
+const MAX_TERMINAL_LINES: usize = 4_000;
+const MAX_COMMAND_HISTORY: usize = 500;
 
 pub mod pty_session;
 pub mod screen_grid;
@@ -118,20 +123,75 @@ pub fn resolve_ir_binary() -> Option<PathBuf> {
 /// Returns true if the command invocation targets an interactive TUI application.
 pub fn is_tui_command(first_word: &str, second_word: Option<&str>) -> bool {
     const TUI_COMMANDS: &[&str] = &[
-        "pmon", "ptop", "nettop", "ntop", "dua", "ncdu", "fm", "browse",
-        "edit", "ed", "clock", "globe", "life", "matrix", "gitv", "dbview",
-        "dbv", "request", "req", "hexview", "hexv", "sysinfo", "sys",
-        "watch", "envv", "top", "htop", "btop", "vim", "nano", "less",
+        "pmon", "ptop", "nettop", "ntop", "monitor", "smon", "dua", "ncdu", "fm", "browse", "edit",
+        "ed", "clock", "globe", "life", "matrix", "gitv", "gitinfo", "gin", "dbview", "dbv",
+        "request", "req", "hexview", "hexv", "sysinfo", "sys", "watch", "envv", "top", "htop",
+        "btop", "vim", "nano", "less",
     ];
 
-    if first_word == "ir" {
+    if first_word.eq_ignore_ascii_case("ir") || first_word.eq_ignore_ascii_case("ir.exe") {
         if let Some(sub) = second_word {
-            return TUI_COMMANDS.contains(&sub);
+            return TUI_COMMANDS.contains(&sub.to_ascii_lowercase().as_str());
         }
     } else {
-        return TUI_COMMANDS.contains(&first_word);
+        return TUI_COMMANDS.contains(&first_word.to_ascii_lowercase().as_str());
     }
     false
+}
+
+fn parse_command_words(input: &str) -> Result<Vec<String>, String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote = None;
+    let mut started = false;
+    let mut chars = input.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if let Some(q) = quote {
+            if ch == q {
+                quote = None;
+            } else if ch == '\\' && q == '"' {
+                match chars.peek().copied() {
+                    Some(next @ ('"' | '\\')) => {
+                        word.push(next);
+                        chars.next();
+                    }
+                    _ => word.push(ch),
+                }
+            } else {
+                word.push(ch);
+            }
+            started = true;
+        } else if ch == '\'' || ch == '"' {
+            quote = Some(ch);
+            started = true;
+        } else if ch == '\\' {
+            match chars.peek().copied() {
+                Some(next)
+                    if next.is_whitespace() || next == '\'' || next == '"' || next == '\\' =>
+                {
+                    word.push(next);
+                    chars.next();
+                }
+                _ => word.push(ch),
+            }
+            started = true;
+        } else if ch.is_whitespace() {
+            if started {
+                words.push(std::mem::take(&mut word));
+                started = false;
+            }
+        } else {
+            word.push(ch);
+            started = true;
+        }
+    }
+    if quote.is_some() {
+        return Err("Unclosed quote in command".into());
+    }
+    if started {
+        words.push(word);
+    }
+    Ok(words)
 }
 
 /// State tracking for the integrated terminal drawer and session history.
@@ -156,6 +216,10 @@ pub struct TerminalState {
     pub screen_grid: TerminalScreenGrid,
     /// Whether the terminal drawer is currently maximized.
     pub is_maximized: bool,
+    last_interrupt: Option<Instant>,
+    command_completion_tx: Sender<Result<Output, String>>,
+    command_completion_rx: Receiver<Result<Output, String>>,
+    pending_command_count: usize,
 }
 
 impl TerminalState {
@@ -166,7 +230,10 @@ impl TerminalState {
 
         lines.push(TerminalLine::new(
             TerminalLineKind::Info,
-            format!("✦ ArcadeEdit Integrated Terminal (v{})", env!("CARGO_PKG_VERSION")),
+            format!(
+                "✦ ArcadeEdit Integrated Terminal (v{})",
+                env!("CARGO_PKG_VERSION")
+            ),
         ));
         lines.push(TerminalLine::new(
             TerminalLineKind::Info,
@@ -190,6 +257,7 @@ impl TerminalState {
             "Type 'ir help' for available actions, or use any standard shell command.\n",
         ));
 
+        let (command_completion_tx, command_completion_rx) = channel();
         Self {
             is_open: false,
             lines,
@@ -199,15 +267,23 @@ impl TerminalState {
             working_dir,
             ir_path: detected_ir,
             active_session: None,
-            screen_grid: TerminalScreenGrid::new(100, 24),
+            screen_grid: TerminalScreenGrid::new(120, 20),
             is_maximized: false,
+            last_interrupt: None,
+            command_completion_tx,
+            command_completion_rx,
+            pending_command_count: 0,
         }
     }
 
     /// Toggles between normal docked height and expanded/maximized height.
     pub fn toggle_maximized(&mut self) {
         self.is_maximized = !self.is_maximized;
-        let (cols, rows) = if self.is_maximized { (100, 30) } else { (100, 24) };
+        let (cols, rows) = if self.is_maximized {
+            (120, 30)
+        } else {
+            (120, 20)
+        };
         self.screen_grid.resize(cols, rows);
         if let Some(ref session) = self.active_session {
             session.resize(cols as u16, rows as u16);
@@ -217,6 +293,7 @@ impl TerminalState {
     /// Polls the active PTY session, draining output bytes into the screen grid.
     /// Returns true if the screen was updated and needs to be repainted.
     pub fn poll_active_session(&mut self) -> bool {
+        self.enforce_buffer_limits();
         let mut changed = false;
 
         if let Some(ref mut session) = self.active_session {
@@ -252,7 +329,8 @@ impl TerminalState {
                 for row in &self.screen_grid.rows_data {
                     let text = row.text();
                     if !text.is_empty() {
-                        self.lines.push(TerminalLine::new(TerminalLineKind::Output, text));
+                        self.lines
+                            .push(TerminalLine::new(TerminalLineKind::Output, text));
                     }
                 }
 
@@ -262,8 +340,15 @@ impl TerminalState {
                 ));
 
                 self.active_session = None;
+                self.last_interrupt = None;
                 changed = true;
             }
+        }
+
+        while let Ok(completion) = self.command_completion_rx.try_recv() {
+            self.append_command_completion(completion);
+            self.pending_command_count = self.pending_command_count.saturating_sub(1);
+            changed = true;
         }
 
         changed
@@ -276,6 +361,11 @@ impl TerminalState {
         }
     }
 
+    /// Returns whether captured terminal commands still have work in progress.
+    pub fn has_pending_commands(&self) -> bool {
+        self.pending_command_count > 0
+    }
+
     /// Terminates any currently running active interactive session.
     pub fn terminate_active_session(&mut self) {
         if let Some(ref mut session) = self.active_session {
@@ -286,6 +376,48 @@ impl TerminalState {
             ));
         }
         self.active_session = None;
+        self.last_interrupt = None;
+    }
+
+    fn enforce_buffer_limits(&mut self) {
+        let extra = self.lines.len().saturating_sub(MAX_TERMINAL_LINES);
+        if extra > 0 {
+            self.lines.drain(..extra);
+        }
+        let extra = self
+            .command_history
+            .len()
+            .saturating_sub(MAX_COMMAND_HISTORY);
+        if extra > 0 {
+            self.command_history.drain(..extra);
+        }
+    }
+
+    fn append_command_completion(&mut self, output: Result<Output, String>) {
+        match output {
+            Ok(output) => {
+                for line in String::from_utf8_lossy(&output.stdout).lines() {
+                    self.lines
+                        .push(TerminalLine::new(TerminalLineKind::Output, line));
+                }
+                for line in String::from_utf8_lossy(&output.stderr).lines() {
+                    self.lines
+                        .push(TerminalLine::new(TerminalLineKind::Error, line));
+                }
+                if !output.status.success() {
+                    self.lines.push(TerminalLine::new(
+                        TerminalLineKind::Error,
+                        format!(
+                            "[Process completed with exit code {:?}]",
+                            output.status.code()
+                        ),
+                    ));
+                }
+            }
+            Err(error) => self
+                .lines
+                .push(TerminalLine::new(TerminalLineKind::Error, error)),
+        }
     }
 
     /// Clears the terminal output buffer.
@@ -329,6 +461,7 @@ impl TerminalState {
 
     /// Executes a command string, resolving `ir` commands to the bundled executable.
     pub fn execute_command(&mut self, raw: &str) {
+        self.enforce_buffer_limits();
         let cmd = raw.trim();
         if cmd.is_empty() {
             return;
@@ -358,20 +491,28 @@ impl TerminalState {
         }
 
         // Tokenize command tokens (split by whitespace while preserving simple segments)
-        let tokens: Vec<&str> = cmd.split_whitespace().collect();
-        let first_word = tokens.first().copied().unwrap_or("");
-        let second_word = tokens.get(1).copied();
+        let tokens = match parse_command_words(cmd) {
+            Ok(tokens) => tokens,
+            Err(error) => {
+                self.lines
+                    .push(TerminalLine::new(TerminalLineKind::Error, error));
+                return;
+            }
+        };
+        let first_word = tokens.first().map(String::as_str).unwrap_or("");
+        let second_word = tokens.get(1).map(String::as_str);
 
         // Check if command invokes an interactive full-screen TUI application
         if is_tui_command(first_word, second_word) {
-            let is_ir_call = first_word == "ir";
+            let is_ir_call =
+                first_word.eq_ignore_ascii_case("ir") || first_word.eq_ignore_ascii_case("ir.exe");
             let (exe_path, args) = if is_ir_call {
                 let ir_binary = self.ir_path.clone().or_else(resolve_ir_binary);
                 if let Some(bin_path) = ir_binary {
                     if self.ir_path.is_none() {
                         self.ir_path = Some(bin_path.clone());
                     }
-                    let args = tokens[1..].iter().map(|s| s.to_string()).collect();
+                    let args = tokens[1..].to_vec();
                     (bin_path, args)
                 } else {
                     self.lines.push(TerminalLine::new(
@@ -383,7 +524,10 @@ impl TerminalState {
             } else {
                 #[cfg(windows)]
                 {
-                    (PathBuf::from("cmd.exe"), vec!["/C".to_string(), cmd.to_string()])
+                    (
+                        PathBuf::from("cmd.exe"),
+                        vec!["/C".to_string(), cmd.to_string()],
+                    )
                 }
                 #[cfg(not(windows))]
                 {
@@ -391,10 +535,20 @@ impl TerminalState {
                 }
             };
 
-            let (cols, rows) = if self.is_maximized { (100, 30) } else { (100, 24) };
+            let (cols, rows) = if self.is_maximized {
+                (120, 30)
+            } else {
+                (120, 20)
+            };
             self.screen_grid.resize(cols, rows);
             self.screen_grid.clear();
-            match PtySession::spawn(&exe_path, &args, &self.working_dir, cols as u16, rows as u16) {
+            match PtySession::spawn(
+                &exe_path,
+                &args,
+                &self.working_dir,
+                cols as u16,
+                rows as u16,
+            ) {
                 Ok(session) => {
                     self.active_session = Some(session);
                 }
@@ -408,98 +562,92 @@ impl TerminalState {
             return;
         }
 
-        // Standard batch shell / ir command dispatch
-        let is_ir_call = first_word == "ir";
-        let result = if is_ir_call {
-            let ir_binary = self.ir_path.clone().or_else(resolve_ir_binary);
-            if let Some(bin_path) = ir_binary {
-                if self.ir_path.is_none() {
-                    self.ir_path = Some(bin_path.clone());
-                }
-                let args = &tokens[1..];
-                #[cfg(windows)]
-                {
-                    Command::new(&bin_path)
-                        .args(args)
-                        .current_dir(&self.working_dir)
-                        .creation_flags(CREATE_NO_WINDOW)
-                        .output()
-                }
-                #[cfg(not(windows))]
-                {
-                    Command::new(&bin_path)
-                        .args(args)
-                        .current_dir(&self.working_dir)
-                        .output()
-                }
-            } else {
+        // Captured commands run off the UI thread. Interactive/full-screen commands above use
+        // the PTY path; ordinary CLI commands can take arbitrarily long to finish.
+        let is_ir_call =
+            first_word.eq_ignore_ascii_case("ir") || first_word.eq_ignore_ascii_case("ir.exe");
+        let (executable, args) = if is_ir_call {
+            let Some(binary) = self.ir_path.clone().or_else(resolve_ir_binary) else {
                 self.lines.push(TerminalLine::new(
                     TerminalLineKind::Error,
-                    "Error: Bundled 'ir' executable could not be resolved. Please verify bin/ir.exe exists.",
+                    "Error: Bundled 'ir' executable could not be resolved. Please verify the companion binary is installed.",
                 ));
                 return;
-            }
+            };
+            self.ir_path = Some(binary.clone());
+            (binary, tokens[1..].to_vec())
         } else {
-            // General shell command dispatch
             #[cfg(windows)]
             {
-                Command::new("cmd")
-                    .args(["/C", cmd])
-                    .current_dir(&self.working_dir)
-                    .creation_flags(CREATE_NO_WINDOW)
-                    .output()
+                (PathBuf::from("cmd.exe"), vec!["/C".into(), cmd.into()])
             }
             #[cfg(not(windows))]
             {
-                Command::new("sh")
-                    .args(["-c", cmd])
-                    .current_dir(&self.working_dir)
-                    .output()
+                (PathBuf::from("sh"), vec!["-c".into(), cmd.into()])
             }
         };
-
-        match result {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines() {
-                    self.lines.push(TerminalLine::new(TerminalLineKind::Output, line));
-                }
-
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                for line in stderr.lines() {
-                    self.lines.push(TerminalLine::new(TerminalLineKind::Error, line));
-                }
-
-                if !output.status.success() {
-                    if let Some(code) = output.status.code() {
-                        self.lines.push(TerminalLine::new(
-                            TerminalLineKind::Error,
-                            format!("[Process completed with exit code {}]", code),
-                        ));
-                    }
-                }
-            }
-            Err(e) => {
-                self.lines.push(TerminalLine::new(
-                    TerminalLineKind::Error,
-                    format!("Failed to execute command: {e}"),
-                ));
-            }
+        let working_dir = self.working_dir.clone();
+        let completion_tx = self.command_completion_tx.clone();
+        let task = std::thread::Builder::new()
+            .name("arcade-terminal-command".into())
+            .spawn(move || {
+                #[cfg(windows)]
+                let result = {
+                    let mut command = Command::new(executable);
+                    command
+                        .args(args)
+                        .current_dir(working_dir)
+                        .creation_flags(CREATE_NO_WINDOW)
+                        .output()
+                };
+                #[cfg(not(windows))]
+                let result = Command::new(executable)
+                    .args(args)
+                    .current_dir(working_dir)
+                    .output();
+                let _ = completion_tx
+                    .send(result.map_err(|error| format!("Failed to execute command: {error}")));
+            });
+        match task {
+            Ok(_) => self.pending_command_count += 1,
+            Err(error) => self.lines.push(TerminalLine::new(
+                TerminalLineKind::Error,
+                format!("Could not start command worker: {error}"),
+            )),
         }
     }
 
     /// Handles keyboard input routed to the terminal prompt. Returns true if handled.
-    pub fn handle_key(&mut self, key: &str, ctrl: bool, char_input: Option<&str>) -> bool {
+    pub fn handle_key(
+        &mut self,
+        key: &str,
+        ctrl: bool,
+        shift: bool,
+        char_input: Option<&str>,
+    ) -> bool {
         // 1. When an interactive PTY session is active, route keystrokes directly into its stdin
         if let Some(ref mut session) = self.active_session {
             if ctrl && key == "c" {
                 let _ = session.write_bytes(b"\x03");
-                session.kill();
-                self.lines.push(TerminalLine::new(
-                    TerminalLineKind::Info,
-                    "[Session terminated by Ctrl+C]",
-                ));
-                self.active_session = None;
+                let now = Instant::now();
+                if self
+                    .last_interrupt
+                    .is_some_and(|at| now.duration_since(at) <= Duration::from_secs(2))
+                {
+                    session.kill();
+                    self.lines.push(TerminalLine::new(
+                        TerminalLineKind::Info,
+                        "[Session force-terminated after repeated Ctrl+C]",
+                    ));
+                    self.active_session = None;
+                    self.last_interrupt = None;
+                } else {
+                    self.last_interrupt = Some(now);
+                    self.lines.push(TerminalLine::new(
+                        TerminalLineKind::Info,
+                        "[Interrupt sent; press Ctrl+C again to force termination]",
+                    ));
+                }
                 return true;
             }
 
@@ -508,34 +656,45 @@ impl TerminalState {
                 return true;
             }
 
-            if !ctrl && key == "q" {
-                let _ = session.write_bytes(b"q");
-                return true;
-            }
-
             // Arrow keys encoded as standard VT100 sequences
-            if key == "up" {
-                let _ = session.write_bytes(b"\x1b[A");
-                return true;
-            }
-            if key == "down" {
-                let _ = session.write_bytes(b"\x1b[B");
-                return true;
-            }
-            if key == "right" {
-                let _ = session.write_bytes(b"\x1b[C");
-                return true;
-            }
-            if key == "left" {
-                let _ = session.write_bytes(b"\x1b[D");
+            let arrow = match key {
+                "up" => Some('A'),
+                "down" => Some('B'),
+                "right" => Some('C'),
+                "left" => Some('D'),
+                _ => None,
+            };
+            if let Some(code) = arrow {
+                let modifier = match (ctrl, shift) {
+                    (true, true) => Some(6),
+                    (true, false) => Some(5),
+                    (false, true) => Some(2),
+                    (false, false) => None,
+                };
+                let sequence = if let Some(modifier) = modifier {
+                    format!("\x1b[1;{modifier}{code}")
+                } else {
+                    format!("\x1b[{code}")
+                };
+                let _ = session.write_bytes(sequence.as_bytes());
                 return true;
             }
             if key == "home" {
-                let _ = session.write_bytes(b"\x1b[H");
+                let sequence = if ctrl {
+                    b"\x1b[1;5H".as_slice()
+                } else {
+                    b"\x1b[H".as_slice()
+                };
+                let _ = session.write_bytes(sequence);
                 return true;
             }
             if key == "end" {
-                let _ = session.write_bytes(b"\x1b[F");
+                let sequence = if ctrl {
+                    b"\x1b[1;5F".as_slice()
+                } else {
+                    b"\x1b[F".as_slice()
+                };
+                let _ = session.write_bytes(sequence);
                 return true;
             }
             if key == "pageup" {
@@ -570,18 +729,54 @@ impl TerminalState {
 
             // Function keys
             match key {
-                "f1" => { let _ = session.write_bytes(b"\x1bOP"); return true; }
-                "f2" => { let _ = session.write_bytes(b"\x1bOQ"); return true; }
-                "f3" => { let _ = session.write_bytes(b"\x1bOR"); return true; }
-                "f4" => { let _ = session.write_bytes(b"\x1bOS"); return true; }
-                "f5" => { let _ = session.write_bytes(b"\x1b[15~"); return true; }
-                "f6" => { let _ = session.write_bytes(b"\x1b[17~"); return true; }
-                "f7" => { let _ = session.write_bytes(b"\x1b[18~"); return true; }
-                "f8" => { let _ = session.write_bytes(b"\x1b[19~"); return true; }
-                "f9" => { let _ = session.write_bytes(b"\x1b[20~"); return true; }
-                "f10" => { let _ = session.write_bytes(b"\x1b[21~"); return true; }
-                "f11" => { let _ = session.write_bytes(b"\x1b[23~"); return true; }
-                "f12" => { let _ = session.write_bytes(b"\x1b[24~"); return true; }
+                "f1" => {
+                    let _ = session.write_bytes(b"\x1bOP");
+                    return true;
+                }
+                "f2" => {
+                    let _ = session.write_bytes(b"\x1bOQ");
+                    return true;
+                }
+                "f3" => {
+                    let _ = session.write_bytes(b"\x1bOR");
+                    return true;
+                }
+                "f4" => {
+                    let _ = session.write_bytes(b"\x1bOS");
+                    return true;
+                }
+                "f5" => {
+                    let _ = session.write_bytes(b"\x1b[15~");
+                    return true;
+                }
+                "f6" => {
+                    let _ = session.write_bytes(b"\x1b[17~");
+                    return true;
+                }
+                "f7" => {
+                    let _ = session.write_bytes(b"\x1b[18~");
+                    return true;
+                }
+                "f8" => {
+                    let _ = session.write_bytes(b"\x1b[19~");
+                    return true;
+                }
+                "f9" => {
+                    let _ = session.write_bytes(b"\x1b[20~");
+                    return true;
+                }
+                "f10" => {
+                    let _ = session.write_bytes(b"\x1b[21~");
+                    return true;
+                }
+                "f11" => {
+                    let _ = session.write_bytes(b"\x1b[23~");
+                    return true;
+                }
+                "f12" => {
+                    let _ = session.write_bytes(b"\x1b[24~");
+                    return true;
+                }
                 _ => {}
             }
 
@@ -1122,6 +1317,16 @@ mod tests {
         assert!(is_tui_command("ir", Some("sysinfo")));
         assert!(is_tui_command("ir", Some("watch")));
         assert!(is_tui_command("ir", Some("envv")));
+        assert!(is_tui_command("IR.EXE", Some("GITINFO")));
+        assert!(is_tui_command("ir", Some("monitor")));
+        for alias in [
+            "ptop", "smon", "ntop", "ncdu", "browse", "ed", "gin", "dbv", "req", "hexv", "sys",
+        ] {
+            assert!(
+                is_tui_command("ir", Some(alias)),
+                "missing TUI alias {alias}"
+            );
+        }
 
         // Non-TUI standard CLI commands should NOT be treated as TUI
         assert!(!is_tui_command("ir", Some("list")));
@@ -1135,6 +1340,15 @@ mod tests {
     }
 
     #[test]
+    fn parses_quoted_paths_and_windows_paths() {
+        assert_eq!(
+            parse_command_words(r#"ir edit "C:\Users\me\my file.txt""#).unwrap(),
+            vec!["ir", "edit", r#"C:\Users\me\my file.txt"#]
+        );
+        assert!(parse_command_words("ir edit \"unfinished").is_err());
+    }
+
+    #[test]
     fn manages_pty_session_lifecycle_and_key_routing() {
         let mut term = TerminalState::new(PathBuf::from("."));
         assert!(term.active_session.is_none());
@@ -1143,17 +1357,17 @@ mod tests {
         term.send_interactive_key("q");
 
         // Test handle_key in interactive mode vs normal mode
-        assert!(term.handle_key("a", false, None));
+        assert!(term.handle_key("a", false, false, None));
         assert_eq!(term.input_buffer, "a");
-        assert!(term.handle_key("b", false, None));
+        assert!(term.handle_key("b", false, false, None));
         assert_eq!(term.input_buffer, "ab");
 
         // Backspace
-        assert!(term.handle_key("backspace", false, None));
+        assert!(term.handle_key("backspace", false, false, None));
         assert_eq!(term.input_buffer, "a");
 
         // Clear input buffer with Ctrl+C
-        assert!(term.handle_key("c", true, None));
+        assert!(term.handle_key("c", true, false, None));
         assert!(term.input_buffer.is_empty());
 
         // Test toggle_maximized
@@ -1163,7 +1377,7 @@ mod tests {
         assert_eq!(term.screen_grid.rows, 30);
         term.toggle_maximized();
         assert!(!term.is_maximized);
-        assert_eq!(term.screen_grid.rows, 24);
+        assert_eq!(term.screen_grid.rows, 20);
     }
 
     #[test]
@@ -1177,7 +1391,11 @@ mod tests {
         let (cmd, args) = ("echo".to_string(), vec!["pty_test_output".to_string()]);
 
         let session_res = PtySession::spawn(Path::new(&cmd), &args, Path::new("."), 80, 24);
-        assert!(session_res.is_ok(), "PtySession should successfully spawn on host platform: {:?}", session_res.err());
+        assert!(
+            session_res.is_ok(),
+            "PtySession should successfully spawn on host platform: {:?}",
+            session_res.err()
+        );
 
         let mut session = session_res.unwrap();
         assert!(!session.command_title.is_empty());
@@ -1193,7 +1411,9 @@ mod tests {
                 }
                 combined.extend(c);
             }
-            if !combined.is_empty() && String::from_utf8_lossy(&combined).contains("pty_test_output") {
+            if !combined.is_empty()
+                && String::from_utf8_lossy(&combined).contains("pty_test_output")
+            {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -1206,6 +1426,79 @@ mod tests {
             text
         );
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn bundled_ir_edit_accepts_typing_navigation_and_interrupt_over_pty() {
+        let binary = resolve_ir_binary().expect("bundled ir.exe must resolve in this checkout");
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let file = std::env::temp_dir().join(format!("arcade edit {nonce}.txt"));
+        std::fs::write(&file, "").unwrap();
+
+        let mut terminal = TerminalState::new(std::env::temp_dir());
+        terminal.ir_path = Some(binary);
+        terminal.execute_command(&format!("ir edit \"{}\"", file.display()));
+        assert!(
+            terminal.active_session.is_some(),
+            "edit must launch in a PTY"
+        );
+
+        std::thread::sleep(Duration::from_millis(250));
+        terminal.poll_active_session();
+        assert!(terminal.handle_key("a", false, false, Some("a")));
+        assert!(terminal.handle_key("left", false, false, None));
+        assert!(terminal.handle_key("right", false, false, None));
+        std::thread::sleep(Duration::from_millis(300));
+        terminal.poll_active_session();
+        let rendered = terminal
+            .screen_grid
+            .rows_data
+            .iter()
+            .map(|row| row.text())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            rendered.contains('a'),
+            "typed text not rendered: {rendered}"
+        );
+
+        // First Ctrl+C is delivered as an interrupt; a quick second one is the explicit force quit.
+        assert!(terminal.handle_key("c", true, false, None));
+        assert!(terminal.active_session.is_some());
+        assert!(terminal.last_interrupt.is_some());
+        assert!(terminal.handle_key("c", true, false, None));
+        assert!(terminal.active_session.is_none());
+        let _ = std::fs::remove_file(file);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn bundled_ir_monitors_quit_from_keyboard_over_pty() {
+        let binary = resolve_ir_binary().expect("bundled ir.exe must resolve in this checkout");
+        for (command, key) in [("ir pmon", "q"), ("ir nettop", "escape")] {
+            let mut terminal = TerminalState::new(std::env::temp_dir());
+            terminal.ir_path = Some(binary.clone());
+            terminal.execute_command(command);
+            assert!(
+                terminal.active_session.is_some(),
+                "{command} must launch in a PTY"
+            );
+            std::thread::sleep(Duration::from_millis(250));
+            terminal.poll_active_session();
+            terminal.handle_key(key, false, false, Some(if key == "q" { "q" } else { "" }));
+
+            let deadline = Instant::now() + Duration::from_secs(8);
+            while terminal.active_session.is_some() && Instant::now() < deadline {
+                terminal.poll_active_session();
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            assert!(
+                terminal.active_session.is_none(),
+                "{command} should exit with {key}"
+            );
+        }
+    }
 }
-
-

@@ -118,7 +118,8 @@ pub fn map_capture_name(name: &str) -> HighlightKind {
         HighlightKind::Type
     } else if name.starts_with("string") || name.starts_with("character") {
         HighlightKind::String
-    } else if name.starts_with("number") || name.starts_with("float") || name.starts_with("boolean") {
+    } else if name.starts_with("number") || name.starts_with("float") || name.starts_with("boolean")
+    {
         HighlightKind::Number
     } else if name.starts_with("comment") {
         HighlightKind::Comment
@@ -130,9 +131,10 @@ pub fn map_capture_name(name: &str) -> HighlightKind {
         HighlightKind::Attribute
     } else if name.starts_with("constant") {
         HighlightKind::Constant
-    } else if name.starts_with("property") || name.starts_with("field") {
-        HighlightKind::Variable
-    } else if name.starts_with("variable") {
+    } else if name.starts_with("property")
+        || name.starts_with("field")
+        || name.starts_with("variable")
+    {
         HighlightKind::Variable
     } else {
         HighlightKind::PlainText
@@ -236,7 +238,10 @@ mod tests {
         assert_eq!(map_capture_name("comment.line"), HighlightKind::Comment);
         assert_eq!(map_capture_name("number"), HighlightKind::Number);
         assert_eq!(map_capture_name("operator"), HighlightKind::Operator);
-        assert_eq!(map_capture_name("unknown.capture"), HighlightKind::PlainText);
+        assert_eq!(
+            map_capture_name("unknown.capture"),
+            HighlightKind::PlainText
+        );
     }
 
     #[test]
@@ -291,13 +296,29 @@ mod tests {
             let u32_start = line.find("u32").unwrap();
 
             // "pub" (0..3)
-            spans.push(HighlightSpan::new(line_start, line_start + 3, HighlightKind::Keyword));
+            spans.push(HighlightSpan::new(
+                line_start,
+                line_start + 3,
+                HighlightKind::Keyword,
+            ));
             // "fn" (4..6)
-            spans.push(HighlightSpan::new(line_start + 4, line_start + 6, HighlightKind::Keyword));
+            spans.push(HighlightSpan::new(
+                line_start + 4,
+                line_start + 6,
+                HighlightKind::Keyword,
+            ));
             // func_name
-            spans.push(HighlightSpan::new(line_start + func_start, line_start + func_start + func_name.len(), HighlightKind::Function));
+            spans.push(HighlightSpan::new(
+                line_start + func_start,
+                line_start + func_start + func_name.len(),
+                HighlightKind::Function,
+            ));
             // "u32"
-            spans.push(HighlightSpan::new(line_start + u32_start, line_start + u32_start + 3, HighlightKind::Type));
+            spans.push(HighlightSpan::new(
+                line_start + u32_start,
+                line_start + u32_start + 3,
+                HighlightKind::Type,
+            ));
 
             line_start += line.len();
             lines.push(line);
@@ -309,26 +330,58 @@ mod tests {
 
         // Verify tokens on line 0
         let tokens0 = resolve_line_tokens("pub fn func_0(arg: u32) -> u32 { arg + 0 }", 0, &spans);
-        assert!(tokens0.iter().any(|t| t.text == "pub" && t.kind == HighlightKind::Keyword));
-        assert!(tokens0.iter().any(|t| t.text == "fn" && t.kind == HighlightKind::Keyword));
-        assert!(tokens0.iter().any(|t| t.text == "func_0" && t.kind == HighlightKind::Function));
-        assert!(tokens0.iter().any(|t| t.text == "u32" && t.kind == HighlightKind::Type));
+        assert!(tokens0
+            .iter()
+            .any(|t| t.text == "pub" && t.kind == HighlightKind::Keyword));
+        assert!(tokens0
+            .iter()
+            .any(|t| t.text == "fn" && t.kind == HighlightKind::Keyword));
+        assert!(tokens0
+            .iter()
+            .any(|t| t.text == "func_0" && t.kind == HighlightKind::Function));
+        assert!(tokens0
+            .iter()
+            .any(|t| t.text == "u32" && t.kind == HighlightKind::Type));
 
         // Verify tokens on line 15 (deep inside document with start_byte > 500)
         let line15_start: usize = lines[..15].iter().map(|l| l.len()).sum();
-        let tokens15 = resolve_line_tokens("pub fn func_15(arg: u32) -> u32 { arg + 15 }", line15_start, &spans);
-        assert!(tokens15.iter().any(|t| t.text == "pub" && t.kind == HighlightKind::Keyword));
-        assert!(tokens15.iter().any(|t| t.text == "fn" && t.kind == HighlightKind::Keyword));
-        assert!(tokens15.iter().any(|t| t.text == "func_15" && t.kind == HighlightKind::Function));
-        assert!(tokens15.iter().any(|t| t.text == "u32" && t.kind == HighlightKind::Type));
+        let tokens15 = resolve_line_tokens(
+            "pub fn func_15(arg: u32) -> u32 { arg + 15 }",
+            line15_start,
+            &spans,
+        );
+        assert!(tokens15
+            .iter()
+            .any(|t| t.text == "pub" && t.kind == HighlightKind::Keyword));
+        assert!(tokens15
+            .iter()
+            .any(|t| t.text == "fn" && t.kind == HighlightKind::Keyword));
+        assert!(tokens15
+            .iter()
+            .any(|t| t.text == "func_15" && t.kind == HighlightKind::Function));
+        assert!(tokens15
+            .iter()
+            .any(|t| t.text == "u32" && t.kind == HighlightKind::Type));
 
         // Verify tokens on last line 29
         let line29_start: usize = lines[..29].iter().map(|l| l.len()).sum();
-        let tokens29 = resolve_line_tokens("pub fn func_29(arg: u32) -> u32 { arg + 29 }", line29_start, &spans);
-        assert!(tokens29.iter().any(|t| t.text == "pub" && t.kind == HighlightKind::Keyword));
-        assert!(tokens29.iter().any(|t| t.text == "fn" && t.kind == HighlightKind::Keyword));
-        assert!(tokens29.iter().any(|t| t.text == "func_29" && t.kind == HighlightKind::Function));
-        assert!(tokens29.iter().any(|t| t.text == "u32" && t.kind == HighlightKind::Type));
+        let tokens29 = resolve_line_tokens(
+            "pub fn func_29(arg: u32) -> u32 { arg + 29 }",
+            line29_start,
+            &spans,
+        );
+        assert!(tokens29
+            .iter()
+            .any(|t| t.text == "pub" && t.kind == HighlightKind::Keyword));
+        assert!(tokens29
+            .iter()
+            .any(|t| t.text == "fn" && t.kind == HighlightKind::Keyword));
+        assert!(tokens29
+            .iter()
+            .any(|t| t.text == "func_29" && t.kind == HighlightKind::Function));
+        assert!(tokens29
+            .iter()
+            .any(|t| t.text == "u32" && t.kind == HighlightKind::Type));
     }
 
     #[test]

@@ -5,7 +5,7 @@ use crate::markdown::highlight_markdown;
 use crate::scanners::{highlight_json, highlight_toml, highlight_yaml};
 use arcade_core::Revision;
 use std::path::Path;
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 use streaming_iterator::StreamingIterator;
 
@@ -70,13 +70,14 @@ impl LanguageService {
             .set_language(&rust_language)
             .map_err(|e| format!("Failed to set Rust language in parser: {e:?}"))?;
 
-        let rust_query = match tree_sitter::Query::new(&rust_language, tree_sitter_rust::HIGHLIGHTS_QUERY) {
-            Ok(q) => Some(q),
-            Err(e) => {
-                eprintln!("Warning: failed to compile tree-sitter Rust query: {e:?}");
-                None
-            }
-        };
+        let rust_query =
+            match tree_sitter::Query::new(&rust_language, tree_sitter_rust::HIGHLIGHTS_QUERY) {
+                Ok(q) => Some(q),
+                Err(e) => {
+                    eprintln!("Warning: failed to compile tree-sitter Rust query: {e:?}");
+                    None
+                }
+            };
 
         Ok(Self {
             parser,
@@ -203,15 +204,16 @@ impl HighlightWorker {
 
     /// Dispatches a new highlighting request to the background worker.
     pub fn request_highlight(&self, revision: Revision, language: LanguageId, text: String) {
-        let _ = self.request_tx.send(HighlightRequest { revision, language, text });
+        let _ = self.request_tx.send(HighlightRequest {
+            revision,
+            language,
+            text,
+        });
     }
 
     /// Attempts to poll a completed response from the background worker without blocking.
     pub fn try_recv_response(&self) -> Option<HighlightResponse> {
-        match self.response_rx.try_recv() {
-            Ok(res) => Some(res),
-            Err(TryRecvError::Empty | TryRecvError::Disconnected) => None,
-        }
+        self.response_rx.try_recv().ok()
     }
 }
 
@@ -226,9 +228,15 @@ mod tests {
         let spans = service.highlight(LanguageId::Rust, code);
 
         assert!(!spans.is_empty());
-        assert!(spans.iter().any(|s| s.kind == crate::highlight::HighlightKind::Keyword));
-        assert!(spans.iter().any(|s| s.kind == crate::highlight::HighlightKind::Function));
-        assert!(spans.iter().any(|s| s.kind == crate::highlight::HighlightKind::Type));
+        assert!(spans
+            .iter()
+            .any(|s| s.kind == crate::highlight::HighlightKind::Keyword));
+        assert!(spans
+            .iter()
+            .any(|s| s.kind == crate::highlight::HighlightKind::Function));
+        assert!(spans
+            .iter()
+            .any(|s| s.kind == crate::highlight::HighlightKind::Type));
     }
 
     #[test]
@@ -237,9 +245,18 @@ mod tests {
         assert_eq!(LanguageId::from_extension("md"), LanguageId::Markdown);
         assert_eq!(LanguageId::from_extension("txt"), LanguageId::PlainText);
 
-        assert_eq!(LanguageId::from_path(Path::new("src/main.rs")), LanguageId::Rust);
-        assert_eq!(LanguageId::from_path(Path::new("README.md")), LanguageId::Markdown);
-        assert_eq!(LanguageId::from_path(Path::new("LICENSE")), LanguageId::PlainText);
+        assert_eq!(
+            LanguageId::from_path(Path::new("src/main.rs")),
+            LanguageId::Rust
+        );
+        assert_eq!(
+            LanguageId::from_path(Path::new("README.md")),
+            LanguageId::Markdown
+        );
+        assert_eq!(
+            LanguageId::from_path(Path::new("LICENSE")),
+            LanguageId::PlainText
+        );
     }
 
     #[test]
@@ -264,4 +281,3 @@ mod tests {
         assert!(!res.spans.is_empty());
     }
 }
-

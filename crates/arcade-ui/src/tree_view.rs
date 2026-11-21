@@ -24,9 +24,9 @@ pub struct VisibleTreeItem {
 /// Recognized binary and executable file extensions that cannot or should not be opened as text documents.
 pub const BINARY_EXTENSIONS: &[&str] = &[
     "exe", "dll", "so", "dylib", "bin", "obj", "o", "a", "lib", "pdb", "iso", "tar", "gz", "zip",
-    "7z", "rar", "wasm", "class", "pyc", "node", "pak", "png", "jpg", "jpeg", "gif", "ico",
-    "webp", "bmp", "tiff", "mp3", "mp4", "wav", "ogg", "flac", "avi", "mkv", "mov", "webm",
-    "woff", "woff2", "ttf", "eot", "otf",
+    "7z", "rar", "wasm", "class", "pyc", "node", "pak", "png", "jpg", "jpeg", "gif", "ico", "webp",
+    "bmp", "tiff", "mp3", "mp4", "wav", "ogg", "flac", "avi", "mkv", "mov", "webm", "woff",
+    "woff2", "ttf", "eot", "otf",
 ];
 
 /// Returns `true` if the path has a known binary or executable extension.
@@ -68,15 +68,33 @@ impl VisibleTreeItem {
 
 /// Builds a flat list of visible tree rows from the given workspace root,
 /// recursively expanding only the directories present in `expanded_dirs`.
-pub fn build_visible_tree(root: &Path, expanded_dirs: &BTreeSet<PathBuf>) -> Vec<VisibleTreeItem> {
+pub fn build_visible_tree(
+    root: &Path,
+    expanded_dirs: &BTreeSet<PathBuf>,
+    discovered_files: &[PathBuf],
+) -> Vec<VisibleTreeItem> {
     let mut items = Vec::new();
-    collect_visible_items(root, expanded_dirs, 0, &mut items);
+    let mut visible_paths = BTreeSet::new();
+    visible_paths.insert(root.to_path_buf());
+    for file in discovered_files {
+        visible_paths.insert(file.clone());
+        let mut parent = file.parent();
+        while let Some(path) = parent {
+            visible_paths.insert(path.to_path_buf());
+            if path == root {
+                break;
+            }
+            parent = path.parent();
+        }
+    }
+    collect_visible_items(root, expanded_dirs, &visible_paths, 0, &mut items);
     items
 }
 
 fn collect_visible_items(
     dir: &Path,
     expanded_dirs: &BTreeSet<PathBuf>,
+    visible_paths: &BTreeSet<PathBuf>,
     depth: usize,
     out: &mut Vec<VisibleTreeItem>,
 ) {
@@ -99,11 +117,11 @@ fn collect_visible_items(
             None => continue,
         };
 
-        if path.is_dir() {
+        if path.is_dir() && visible_paths.contains(&path) {
             if !DEFAULT_IGNORED_DIRS.contains(&name) {
                 dirs.push(path);
             }
-        } else if path.is_file() {
+        } else if path.is_file() && visible_paths.contains(&path) {
             files.push(path);
         }
     }
@@ -114,14 +132,24 @@ fn collect_visible_items(
             .unwrap_or_default()
             .to_string_lossy()
             .to_lowercase()
-            .cmp(&b.file_name().unwrap_or_default().to_string_lossy().to_lowercase())
+            .cmp(
+                &b.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_lowercase(),
+            )
     });
     files.sort_by(|a, b| {
         a.file_name()
             .unwrap_or_default()
             .to_string_lossy()
             .to_lowercase()
-            .cmp(&b.file_name().unwrap_or_default().to_string_lossy().to_lowercase())
+            .cmp(
+                &b.file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_lowercase(),
+            )
     });
 
     // 1. Process directories first
@@ -142,7 +170,7 @@ fn collect_visible_items(
         });
 
         if is_expanded {
-            collect_visible_items(&d, expanded_dirs, depth + 1, out);
+            collect_visible_items(&d, expanded_dirs, visible_paths, depth + 1, out);
         }
     }
 
@@ -174,7 +202,8 @@ mod tests {
         let mut expanded = BTreeSet::new();
 
         // Initially collapsed: root direct children only
-        let collapsed_tree = build_visible_tree(&manifest_dir, &expanded);
+        let files = arcade_workspace::discover_files(&[&manifest_dir]);
+        let collapsed_tree = build_visible_tree(&manifest_dir, &expanded, &files);
         assert!(!collapsed_tree.is_empty());
         assert!(collapsed_tree.iter().any(|item| item.name == "Cargo.toml"));
 
@@ -183,14 +212,20 @@ mod tests {
         if src_dir.exists() {
             let collapsed_count = collapsed_tree.len();
             expanded.insert(src_dir.clone());
-            let expanded_tree = build_visible_tree(&manifest_dir, &expanded);
+            let expanded_tree = build_visible_tree(&manifest_dir, &expanded, &files);
 
             assert!(expanded_tree.len() > collapsed_count);
-            let src_item = expanded_tree.iter().find(|i| i.path == src_dir).expect("src dir found");
+            let src_item = expanded_tree
+                .iter()
+                .find(|i| i.path == src_dir)
+                .expect("src dir found");
             assert!(src_item.is_expanded);
             assert_eq!(src_item.icon(), "📂");
 
-            let lib_item = expanded_tree.iter().find(|i| i.name == "lib.rs").expect("lib.rs found");
+            let lib_item = expanded_tree
+                .iter()
+                .find(|i| i.name == "lib.rs")
+                .expect("lib.rs found");
             assert_eq!(lib_item.depth, 1);
             assert_eq!(lib_item.icon(), "🦀");
         }

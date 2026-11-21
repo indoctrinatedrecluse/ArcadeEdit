@@ -11,9 +11,9 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "1.2.1"
+version = "1.3.0"
 edition = "2021"
-rust-version = "1.82"
+rust-version = "1.98"
 authors = ["ArcadeEdit contributors"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/indoctrinatedrecluse/ArcadeEdit"
@@ -27,6 +27,8 @@ ropey = "1.6.1"
 serde = { version = "1.0", features = ["derive"] }
 portable-pty = "0.9"
 vte = "0.15"
+ignore = "0.4"
+futures = "0.3"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

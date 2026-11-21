@@ -9,35 +9,38 @@ ArcadeEdit is a features-packed editor that stays an **editor**, not an IDE. It 
 ArcadeEdit is built in Rust around one shared editing engine. That engine powers two equal product modes:
 
 - 🖥️ **Rendered mode** — a native desktop editor built with GPUI and an original ArcadeEdit interface.
-- ⚙️ **Headless mode** — a deterministic CLI/service runtime for local automation, SSH, CI, and containers; it has no display or GPU requirement.
+- ⚙️ **Headless mode** — a deterministic CLI for local automation, SSH, CI, and containers; it has no display or GPU requirement.
 
 The desktop application is the rich visual home for writing and editing. Headless mode exposes the same document, search, syntax, and transformation capabilities to scripts and isolated environments.
 
 ## 🧭 Product principles
 
 - ✍️ **Text first.** Editing quality, responsiveness, and useful text workflows come before IDE features.
-- ⚡ **Fast by design.** Large-file performance comes from a rope document model, incremental work, virtualized layout, and bounded caches—not just GPU drawing.
+- ⚡ **Fast by design.** The rope model and background highlighting help keep editing responsive; visible-line virtualization is still planned.
 - 🎨 **Our own interface.** GPUI supplies the application and GPU rendering framework; ArcadeEdit owns all visible UI, interaction patterns, and visual language.
-- 🔁 **One core, many surfaces.** Desktop and headless modes use one versioned editor model and command protocol.
-- 🔒 **Safe automation.** Preview, dry-run, diff, and explicit write controls are core headless behaviors.
-- 🧩 **Extensible later.** The core exposes stable command boundaries first; a public extensions API follows only after those boundaries have earned their shape.
+- 🔁 **One core, many surfaces.** Desktop and headless modes share the document/search core and versioned JSON result envelopes. The protocol `Command` enum is not yet the CLI dispatch boundary.
+- 🔒 **Safe automation.** Preview, dry-run, and explicit write controls are core headless behaviors; diff output remains planned.
+- 🧩 **Extensible later.** The typed command protocol is defined, but CLI dispatch is not yet routed through it; a public extensions API remains future work.
 
 ## 🏗️ Architecture
 
 ```text
                          🧠 arcade-core
        documents · transactions · selections · undo/redo · search
-           Ropey text storage · Tree-sitter syntax · workspace model
+                  Ropey storage · UTF-8 byte offsets
+                                  │
+              🌳 arcade-language · 📁 arcade-workspace
+                syntax services · ignore-aware discovery
                                   │
                      📦 arcade-protocol
-       versioned commands · edits · diagnostics · diffs · JSON results
+            versioned command/result types · JSON envelopes
                          ╱                    ╲
           🖥️ arcade-desktop                  ⚙️ arcade-headless
-         GPUI custom frontend              CLI / service / containers
+         GPUI custom frontend              CLI / containers
          GPU-rendered editor               no display or GPU required
 ```
 
-`arcade-core` must not depend on GPUI, a windowing system, a terminal emulator, or a container runtime. GPUI belongs exclusively to the desktop surface.
+`arcade-core` must not depend on GPUI, a windowing system, a terminal emulator, or a container runtime. GPUI belongs exclusively to the desktop surface. `arcade-headless` currently depends on the core, language, protocol, and workspace crates, and its dependency graph is checked to exclude GPUI.
 
 ## 🧱 Planned stack
 
@@ -56,57 +59,53 @@ The desktop application is the rich visual home for writing and editing. Headles
 ### 📐 Text and rendering rules
 
 - Tree-sitter and syntax spans use **UTF-8 byte offsets**.
-- Cursor movement and user-visible selection use character/grapheme-aware operations.
+- Cursor movement currently advances by Unicode scalar values; grapheme-aware editing remains planned.
 - Every edit produces a precise before/after `TextEdit`, allowing the parser, undo history, views, and headless clients to stay synchronized.
-- The layout engine renders only visible visual lines plus a small overscan region.
-- Huge-file mode intentionally limits expensive work such as syntax parsing, wrapping, and heavyweight indexing.
+- The editor currently renders every line in an opened document. A 50 MiB discovery/open limit is in place; visible-line virtualization and a richer huge-file mode remain planned.
 
 ## 🖥️ Rendered mode
 
-The desktop app will be a custom GPUI application—not a reskin of Zed or a dependency on Zed CoreUI.
+The desktop app is a custom GPUI application, not a reskin of Zed or a dependency on Zed CoreUI.
 
-### First editor experience
+### Implemented editor workflows
 
-- 📄 Fast open, edit, save, reload, and external-change handling
-- 🗂️ Tabs, split panes, sessions, and workspace folders
-- ↕️ Smooth scrolling, line numbers, soft wrap, minimap consideration, and large-file mode
-- ✨ Multi-cursor editing, selections, undo/redo, find/replace, and command palette
-- 🎨 Themes, typography, keymaps, and an accessible custom design system
-- 🌳 Tree-sitter syntax highlighting, structural selection, folds, and outlines
-- ⌨️ An integrated terminal surface for deliberate command-line workflows
+- Open, edit, save, and Save As; changed-on-disk files are protected from a straightforward stale-buffer overwrite.
+- Tabs with dirty close prompts, workspace folders and ignore-aware explorer, line numbers, and dark/light themes.
+- Multi-cursor edits, system clipboard copy/cut/paste, undo/redo, find/replace, and command palette.
+- Rust/Markdown Tree-Sitter highlighting and JSON/TOML/YAML scanners on a background worker.
+- Read-only current-document preview and an integrated PTY terminal for bundled `ir` commands.
+
+Reload/compare conflict choices, grapheme-aware movement, visible-line virtualization, split panes, session restore, soft wrap, folds, outlines, settings/keymaps, and typography remain future work.
 
 ## ⚙️ Headless and containerized mode
 
-Headless mode is a product capability, not a test-only adaptation of the GUI. `arcade-headless` will use `arcade-core` directly and must work without GPUI, a display server, or GPU access.
+Headless mode is a product capability, not a test-only adaptation of the GUI. `arcade-headless` uses `arcade-core` directly and works without GPUI, a display server, or GPU access.
 
-### Planned capabilities
+### Current capabilities
 
-- 🔍 Deterministic open, search, structural query, transform, save, and diff workflows
-- 🧪 `--check` / dry-run and machine-readable JSON output for CI and scripts
-- 👀 Watch mode for repeatable local workflows
-- 🐳 An unprivileged container image with an explicitly mounted workspace
-- 🔐 Read-only by default; writes require an explicit opt-in
-- 🌐 A future local/remote service only after the CLI command and result protocol is stable
+- 🔍 `inspect`, `search`, and workspace `replace` commands
+- 🧪 `--check`, preview-by-default replacement, explicit `--write`, and versioned JSON results
+- 🐳 An unprivileged container image with a mounted workspace workflow
 
-Illustrative command shape:
+The CLI does not currently implement structural queries, diff output, watch mode, or a local/remote service. These remain future work. Supported command examples:
 
 ```sh
-arcade edit src --find "oldName" --replace "newName" --preview
-arcade query README.md --syntax markdown --select heading:Installation
-arcade apply recipe.toml --check --json
+arcade-headless inspect README.md --json
+arcade-headless search "oldName" src/ --json
+arcade-headless replace "oldName" "newName" src/ --dry-run
+arcade-headless replace "oldName" "newName" src/ --write
 ```
 
 ## 🛠️ Integrated `ir` command utility
 
-ArcadeEdit will ship alongside [`ir-cli-utility`](https://github.com/indoctrinatedrecluse/ir-cli-utility), the pure-Rust `ir` command-line utility. `ir` provides cross-platform filesystem and shell-style operations through native OS syscalls rather than aliases or aggregation of Windows built-ins.
+ArcadeEdit bundles and resolves [`ir-cli-utility`](https://github.com/indoctrinatedrecluse/ir-cli-utility), a Rust command-line utility. The companion release is separately versioned; packaged artifacts are not yet checksum-verified by this repository.
 
-The built-in terminal will make `ir` immediately available as a companion workflow for file operations, search, inspection, archiving, and other command-line tasks. ArcadeEdit will also include an attributable, version-pinned copy of the relevant `ir` documentation in its in-app help.
+The built-in PTY terminal makes interactive and ordinary `ir` commands available. Its interactive-command map is based on bundled `ir help`; broader TUI navigation and editor save/quit behavior still need integration coverage.
 
 ### 📚 Integration commitments
 
-- Bundle a tested `ir` binary for each supported ArcadeEdit platform.
-- Surface the bundled version and upstream project link in About/Help.
-- Include the selected upstream documentation with its required attribution and license notices.
+- Bundle the `ir` artifact for each platform included in the current release workflow.
+- Keep the upstream project link in About/Help; verify its version/license text and add complete notices before broad redistribution.
 - Keep the terminal a real terminal: `ir` is available to the user, but it is not a hidden replacement for normal editor file operations.
 - Resolve exact bundle version, distribution terms, updates, and attribution before packaging.
 
@@ -116,16 +115,16 @@ The built-in terminal will make `ir` immediately available as a companion workfl
 
 - Shared document core, transaction history, and file I/O
 - GPUI desktop shell and custom editor view
-- Tabs, text editing, multi-cursor, undo/redo, search/replace, themes, and settings
+- Tabs, text editing, multi-cursor, undo/redo, search/replace, and dark/light themes
 - Tree-sitter highlighting for an initial curated language set
-- Headless CLI with preview, diff, JSON output, and safe write behavior
+- Headless CLI with preview, JSON output, and explicit safe write behavior
 - Integrated terminal and packaged `ir` utility/documentation
 
 ### 🟡 Later, after the core is proven
 
 - Workspace-wide search and richer session restoration
 - Split panes, folds, outlines, and advanced text transforms
-- Container images and a polished automation workflow
+- More container hardening and broader platform automation coverage
 - Optional local/remote headless service
 - Extension API and sandboxed extension host
 
@@ -146,12 +145,14 @@ The built-in terminal will make `ir` immediately available as a companion workfl
 6. ✅ 🛠️ Add the integrated terminal and a versioned `ir` bundle/documentation pipeline.
 7. ⏳ 🐳 Package, benchmark, harden container behavior, and define huge-file limits.
 
-## 🚧 Status (v1.2.1 Release)
+## 🚧 Status (v1.3.0 Release)
 
 **Interactive Desktop, ConPTY Terminal & Versioned Headless CLI Active.** The project currently features:
 - 🎨 **Solarized Glass GUI** (`arcade-desktop` / `arcade-ui`): A GPU-rendered desktop interface styled with a Solarized Dark minimalist palette, translucent acrylic glass sheen layers, macOS/MAUI-inspired floating command palette (`Ctrl+P`), live multi-cursor keyboard editing, vertical cursor glow, and dynamic language/revision status bar.
 - 📟 **Integrated Terminal & Bundled Companion Utilities** (`arcade-ui::terminal`): Persistent bottom terminal panel powered by native ConPTY/PTY with 256-color and 24-bit Truecolor ANSI screen grid, reverse video, DEC cursor tracking, dynamic height maximization, command history, prompt execution, quick actions (`ir help`, `ir list`), and automatic self-resolution of the bundled `ir` and `term-sys-monitor` executables without requiring PATH configuration.
-- 📖 **In-App Help & Documentation Modal** (`arcade-ui::help_modal`): Accessible via titlebar `[HELP ▾]` or `F1`, featuring full `ir` command reference documentation, keyboard shortcuts, and About section (`ArcadeEdit` v1.2.1 by `indoctrinatedrecluse`).
+- 📖 **In-App Help & Documentation Modal** (`arcade-ui::help_modal`): Accessible via titlebar `[HELP ▾]` or `F1`, featuring full `ir` command reference documentation, keyboard shortcuts, and About section (`ArcadeEdit` v1.3.0 by `indoctrinatedrecluse`).
+- 🔄 **Release updates**: Desktop checks for a newer stable release at launch and from Help; Windows x86_64 can download, verify, and stage the update for restart.
+- 🎯 **Go to Line**: Use `Ctrl+G` or the command palette to navigate to a one-based line and optional column.
 - 🌳 **Tree-Sitter Background Syntax Worker** (`arcade-language`): Non-blocking AST-based parsing and query capture execution on a dedicated background worker thread (`tree-sitter = "0.25"` and `tree-sitter-rust = "0.24"`), with markdown scanner and UTF-8 safe line token resolution.
 - ⚙️ **Deterministic Headless CLI** (`arcade-headless`): A lightweight CLI core free of GPUI or display dependencies, communicating over `arcade-protocol` (v1) with `inspect`, `search`, and `replace` subcommands supporting `--json`, `--dry-run`, and `--check` modes.
 - 🧠 **Multi-Cursor Core Engine** (`arcade-core`): Ropey-backed document buffer with byte offsets, revision tracking, atomic transactions, bounded undo/redo history, atomic file persistence, and in-memory rope search.
@@ -161,9 +162,11 @@ The built-in terminal will make `ir` immediately available as a companion workfl
 
 ### 📋 Prerequisites
 
-- Stable Rust **1.82+** (`rustup default stable`).
-- **Rendered GUI mode**: Windows (DirectX/Direct3D 11 via GPUI), macOS (Metal), or Linux (Vulkan/Wayland/X11).
-- **Headless mode**: Linux, macOS, or Windows (no display server, GPU, or graphical driver required).
+- Rust **1.98.1**, pinned by `rust-toolchain.toml` and shared by local builds, CI, and the headless container builder.
+- **Rendered GUI mode**: Windows (DirectX/Direct3D 11 via GPUI) is the locally verified desktop target. macOS (Metal) and Linux (Vulkan/Wayland/X11) builds are not yet covered by this repository's release/CI matrix.
+- **Headless mode**: Linux and Windows are covered by CI/release builds; macOS should work with Rust but is not currently in the release matrix. No display server, GPU, or graphical driver is required.
+
+Headless replacement is preview-only unless `--write` is supplied. Docker runs as UID 10001 by default; for writable bind mounts, run with the host user's UID/GID (for example, `docker run --user "$(id -u):$(id -g)" ...`) or grant that container user write access to the mounted directory.
 
 ---
 
@@ -206,8 +209,9 @@ cargo run -p arcade-headless -- inspect Cargo.toml --json
 cargo run -p arcade-headless -- search "TODO" crates/
 cargo run -p arcade-headless -- search "fn main" crates/ --json
 
-# Atomic search-and-replace with dry-run and CI check modes
-cargo run -p arcade-headless -- replace "old_api" "new_api" src/ --dry-run
+# Search-and-replace (atomic per file) with preview, write, and CI check modes
+cargo run -p arcade-headless -- replace "old_api" "new_api" src/
+cargo run -p arcade-headless -- replace "old_api" "new_api" src/ --write
 cargo run -p arcade-headless -- replace "deprecated_fn" "new_fn" src/ --check
 ```
 
@@ -227,22 +231,23 @@ docker run --rm -v "$(pwd):/workspace" arcade-edit inspect Cargo.toml --json
 # Run codebase search and replacements via Docker Compose
 docker compose run --rm arcade search "ArcadeEdit"
 docker compose run --rm arcade replace "old_api" "new_api" --dry-run
+docker compose run --rm --user "$(id -u):$(id -g)" arcade replace "old_api" "new_api" --write
 
 # Run interactive companion shell in container
-docker compose run --rm term ir pmon
+docker compose run --rm term -c "ir pmon"
 ```
 
 ---
 
-### 🧪 Fast verification & testing
+### 🧪 Verification & testing
 
-To verify the entire workspace with sub-second execution times:
+Run these from the workspace root:
 
 ```sh
 # Fast typecheck across all workspace crates
 cargo check --workspace
 
-# Run all unit tests across the workspace (54 tests)
+# Run all unit tests across the workspace
 cargo test --workspace --lib
 ```
 

@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.0] - 2026-11-22
+
+### Added
+
+- Added Go to Line navigation with optional column targeting (`Ctrl+G` or the command palette).
+- Added a UI-consistent release checker that runs at desktop launch and can be opened from Help or the command palette.
+- Added verified Windows desktop update downloads with SHA-256 validation and staged restart installation.
+- Added Windows, Linux headless, and container CI coverage for the release-critical paths.
+
+### Improved
+
+- Strengthened stale-file detection with a content fingerprint so same-size edits are detected even when timestamps do not change.
+- Improved headless safety, workspace discovery, error reporting, editor persistence, terminal PTY input handling, and container defaults.
+- Unified all workspace crates on Rust 1.98.1 and updated release and container build configuration.
+
+### Platform notes
+
+- Automatic update installation is currently supported for Windows desktop builds. Other platforms can check for releases and use the published platform package manually.
+- Workspace-wide replacement remains atomic per file; a failure after earlier files were saved can leave a partial result, reported by the CLI.
+
 ## [1.2.1] - 2026-10-16
 
 ### 🎨 TUI Rendering Engine Overhaul, Dynamic Terminal Drawer, and Multi-Cursor Forward Deletion

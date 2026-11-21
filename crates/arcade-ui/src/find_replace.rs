@@ -3,9 +3,9 @@
 use gpui::prelude::*;
 use gpui::{div, px, Context, Div};
 
-use arcade_core::{Rope, TextRange};
 use crate::theme::SolarizedTheme;
 use crate::ArcadeShell;
+use arcade_core::{Rope, TextRange};
 
 /// Tracks which input field within the Find & Replace widget currently has keyboard focus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,7 +125,10 @@ impl FindReplaceState {
             while let Some(pos) = full_text[start..].find(&self.query) {
                 let m_start = start + pos;
                 let m_end = m_start + query_len;
-                if let Ok(range) = TextRange::new(arcade_core::ByteOffset(m_start), arcade_core::ByteOffset(m_end)) {
+                if let Ok(range) = TextRange::new(
+                    arcade_core::ByteOffset(m_start),
+                    arcade_core::ByteOffset(m_end),
+                ) {
                     self.matches.push(range);
                 }
                 start = m_start + query_len.max(1);
@@ -137,7 +140,10 @@ impl FindReplaceState {
             while let Some(pos) = lower_doc[start..].find(&lower_query) {
                 let m_start = start + pos;
                 let m_end = m_start + query_len;
-                if let Ok(range) = TextRange::new(arcade_core::ByteOffset(m_start), arcade_core::ByteOffset(m_end)) {
+                if let Ok(range) = TextRange::new(
+                    arcade_core::ByteOffset(m_start),
+                    arcade_core::ByteOffset(m_end),
+                ) {
                     self.matches.push(range);
                 }
                 start = m_start + query_len.max(1);
@@ -325,10 +331,13 @@ pub fn render_find_replace_bar(
                             theme.border_subtle
                         })
                         .cursor_pointer()
-                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
-                            this.find_replace.focus = FindFocus::Query;
-                            cx.notify();
-                        }))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
+                                this.find_replace.focus = FindFocus::Query;
+                                cx.notify();
+                            }),
+                        )
                         .child(
                             div()
                                 .text_size(px(11.0))
@@ -377,10 +386,13 @@ pub fn render_find_replace_bar(
                         .text_color(theme.text_secondary)
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.bg_hover_glass).text_color(theme.text_bright))
-                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
-                            this.find_prev_match();
-                            cx.notify();
-                        }))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
+                                this.find_prev_match();
+                                cx.notify();
+                            }),
+                        )
                         .child("↑"),
                 )
                 // Navigation Next (↓)
@@ -396,10 +408,13 @@ pub fn render_find_replace_bar(
                         .text_color(theme.text_secondary)
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.bg_hover_glass).text_color(theme.text_bright))
-                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
-                            this.find_next_match();
-                            cx.notify();
-                        }))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
+                                this.find_next_match();
+                                cx.notify();
+                            }),
+                        )
                         .child("↓"),
                 )
                 // Find "All" Button (multi-cursor: selects all occurrences!)
@@ -416,10 +431,13 @@ pub fn render_find_replace_bar(
                         .text_color(theme.syntax_cyan)
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.bg_hover_glass).text_color(theme.text_bright))
-                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
-                            this.select_all_find_matches();
-                            cx.notify();
-                        }))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
+                                this.select_all_find_matches();
+                                cx.notify();
+                            }),
+                        )
                         .child("All"),
                 )
                 // Case Match Toggle (Aa)
@@ -448,11 +466,15 @@ pub fn render_find_replace_bar(
                         })
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.bg_hover_glass))
-                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
-                            this.find_replace.case_sensitive = !this.find_replace.case_sensitive;
-                            this.find_replace.update_matches(this.document.rope());
-                            cx.notify();
-                        }))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
+                                this.find_replace.case_sensitive =
+                                    !this.find_replace.case_sensitive;
+                                this.find_replace.update_matches(this.document.rope());
+                                cx.notify();
+                            }),
+                        )
                         .child("Aa"),
                 )
                 // Toggle Replace Row (🔁)
@@ -476,10 +498,13 @@ pub fn render_find_replace_bar(
                         .text_color(theme.text_secondary)
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.bg_hover_glass).text_color(theme.text_bright))
-                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
-                            this.find_replace.toggle_replace();
-                            cx.notify();
-                        }))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
+                                this.find_replace.toggle_replace();
+                                cx.notify();
+                            }),
+                        )
                         .child("🔁"),
                 )
                 // Close Button (✕)
@@ -492,10 +517,13 @@ pub fn render_find_replace_bar(
                         .text_color(theme.text_muted)
                         .cursor_pointer()
                         .hover(|s| s.bg(theme.bg_hover_glass).text_color(theme.syntax_magenta))
-                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
-                            this.find_replace.close();
-                            cx.notify();
-                        }))
+                        .on_mouse_down(
+                            gpui::MouseButton::Left,
+                            cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
+                                this.find_replace.close();
+                                cx.notify();
+                            }),
+                        )
                         .child("✕"),
                 ),
         )
@@ -524,10 +552,13 @@ pub fn render_find_replace_bar(
                                 theme.border_subtle
                             })
                             .cursor_pointer()
-                            .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
-                                this.find_replace.focus = FindFocus::Replacement;
-                                cx.notify();
-                            }))
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
+                                    this.find_replace.focus = FindFocus::Replacement;
+                                    cx.notify();
+                                }),
+                            )
                             .child(
                                 div()
                                     .text_size(px(11.0))
@@ -541,54 +572,60 @@ pub fn render_find_replace_bar(
                                     .text_color(if state.replacement.is_empty() {
                                         theme.text_muted
                                     } else {
-                                    theme.text_bright
-                                })
-                                .child(if state.replacement.is_empty() {
-                                    "Replace with...".to_string()
-                                } else {
-                                    state.replacement.clone()
+                                        theme.text_bright
+                                    })
+                                    .child(if state.replacement.is_empty() {
+                                        "Replace with...".to_string()
+                                    } else {
+                                        state.replacement.clone()
+                                    }),
+                            ),
+                    )
+                    // Replace Current Match
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .bg(theme.badge_bg)
+                            .border_1()
+                            .border_color(theme.border_subtle)
+                            .text_size(px(11.0))
+                            .text_color(theme.syntax_green)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_hover_glass).text_color(theme.text_bright))
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
+                                    this.replace_current_find_match();
+                                    cx.notify();
                                 }),
-                        ),
-                )
-                // Replace Current Match
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .bg(theme.badge_bg)
-                        .border_1()
-                        .border_color(theme.border_subtle)
-                        .text_size(px(11.0))
-                        .text_color(theme.syntax_green)
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme.bg_hover_glass).text_color(theme.text_bright))
-                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
-                            this.replace_current_find_match();
-                            cx.notify();
-                        }))
-                        .child("Replace"),
-                )
-                // Replace All Button ("All")
-                .child(
-                    div()
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .bg(theme.badge_bg)
-                        .border_1()
-                        .border_color(theme.syntax_green)
-                        .text_size(px(11.0))
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(theme.syntax_green)
-                        .cursor_pointer()
-                        .hover(|s| s.bg(theme.bg_hover_glass).text_color(theme.text_bright))
-                        .on_mouse_down(gpui::MouseButton::Left, cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
-                            this.replace_all_find_matches();
-                            cx.notify();
-                        }))
-                        .child("All"),
-                ),
+                            )
+                            .child("Replace"),
+                    )
+                    // Replace All Button ("All")
+                    .child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .bg(theme.badge_bg)
+                            .border_1()
+                            .border_color(theme.syntax_green)
+                            .text_size(px(11.0))
+                            .font_weight(gpui::FontWeight::BOLD)
+                            .text_color(theme.syntax_green)
+                            .cursor_pointer()
+                            .hover(|s| s.bg(theme.bg_hover_glass).text_color(theme.text_bright))
+                            .on_mouse_down(
+                                gpui::MouseButton::Left,
+                                cx.listener(|this: &mut crate::ArcadeShell, _, _, cx| {
+                                    this.replace_all_find_matches();
+                                    cx.notify();
+                                }),
+                            )
+                            .child("All"),
+                    ),
             )
         })
 }

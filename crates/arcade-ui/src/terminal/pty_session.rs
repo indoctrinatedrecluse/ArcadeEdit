@@ -6,7 +6,7 @@
 use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtyPair, PtySize};
 use std::io::{Read, Write};
 use std::path::Path;
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{sync_channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -58,7 +58,8 @@ impl PtySession {
             .take_writer()
             .map_err(|e| format!("Failed to take PTY writer: {e}"))?;
 
-        let (tx, rx) = channel();
+        // Backpressure bounds memory usage if the child produces output faster than the UI.
+        let (tx, rx) = sync_channel(128);
 
         // Background reader thread: continuously pumps stdout/stderr bytes into the channel
         thread::Builder::new()
@@ -90,7 +91,10 @@ impl PtySession {
         } else {
             format!(
                 "{} {}",
-                executable.file_name().and_then(|n| n.to_str()).unwrap_or("cmd"),
+                executable
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("cmd"),
                 args.join(" ")
             )
         };
@@ -109,8 +113,7 @@ impl PtySession {
         if let Ok(mut w) = self.writer.lock() {
             w.write_all(bytes)
                 .map_err(|e| format!("Failed to write to PTY: {e}"))?;
-            w.flush()
-                .map_err(|e| format!("Failed to flush PTY: {e}"))?;
+            w.flush().map_err(|e| format!("Failed to flush PTY: {e}"))?;
             Ok(())
         } else {
             Err("Failed to acquire PTY writer lock".into())
@@ -151,3 +154,10 @@ impl PtySession {
     }
 }
 
+impl Drop for PtySession {
+    fn drop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+        }
+    }
+}

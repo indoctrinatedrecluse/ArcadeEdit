@@ -15,7 +15,7 @@ use arcade_protocol::{
     FileReplaceSummary, InspectResult, ReplaceResult, Response, SearchMatch, SearchResult,
     PROTOCOL_VERSION,
 };
-use arcade_workspace::discover_files;
+use arcade_workspace::discover_files_with_errors;
 
 fn print_help() {
     println!(
@@ -31,14 +31,15 @@ SUBCOMMANDS:
     search <QUERY> [PATHS...] [--json]
         Find all occurrences of a string query across files and directories.
 
-    replace <QUERY> <REPLACEMENT> [PATHS...] [--dry-run] [--check] [--json]
-        Perform atomic search-and-replace across files.
+    replace <QUERY> <REPLACEMENT> [PATHS...] [--write] [--dry-run] [--check] [--json]
+        Preview replacements by default. Modify files only when --write is supplied.
 
 FLAGS:
     -h, --help       Print help information
     -V, --version    Print version and protocol information
     --json           Output results as structured, versioned JSON
     --dry-run        Calculate and report replacements without modifying files
+    --write          Write replacements to disk (required to modify files)
     --check          Verify whether matches exist; exits 1 if matches found, 0 if clean
 
 EXAMPLES:
@@ -46,6 +47,7 @@ EXAMPLES:
     arcade-headless inspect Cargo.toml --json
     arcade-headless search "TODO" crates/
     arcade-headless replace "old_api" "new_api" src/ --dry-run
+    arcade-headless replace "old_api" "new_api" src/ --write
     arcade-headless replace "foo" "bar" src/ --check
 "#,
         PROTOCOL_VERSION
@@ -154,35 +156,41 @@ fn run_search(query: &str, paths: &[String], json_mode: bool) -> Result<ExitCode
         paths.iter().map(PathBuf::from).collect()
     };
 
-    let files = discover_files(&search_roots);
+    let discovery = discover_files_with_errors(&search_roots);
+    let files = discovery.files;
     let mut matches = Vec::new();
-    let files_searched = files.len();
+    let mut files_searched = 0;
+    let mut errors = discovery.errors;
 
     for file_path in &files {
-        if let Ok((doc, _)) = load_from_file(file_path) {
-            let found_ranges = find_all(doc.rope(), query);
-            let rope = doc.rope();
+        match load_from_file(file_path) {
+            Ok((doc, _)) => {
+                files_searched += 1;
+                let found_ranges = find_all(doc.rope(), query);
+                let rope = doc.rope();
 
-            for range in found_ranges {
-                let line_idx = doc.line_of_byte(range.start);
-                let line_start_char = rope.line_to_char(line_idx);
-                let match_char = doc.byte_to_char(range.start).unwrap_or(0);
-                let col = match_char.saturating_sub(line_start_char) + 1;
+                for range in found_ranges {
+                    let line_idx = doc.line_of_byte(range.start);
+                    let line_start_char = rope.line_to_char(line_idx);
+                    let match_char = doc.byte_to_char(range.start).unwrap_or(0);
+                    let col = match_char.saturating_sub(line_start_char) + 1;
 
-                let line_slice = rope.line(line_idx);
-                let line_text = line_slice
-                    .to_string()
-                    .trim_end_matches(['\r', '\n'])
-                    .to_string();
+                    let line_slice = rope.line(line_idx);
+                    let line_text = line_slice
+                        .to_string()
+                        .trim_end_matches(['\r', '\n'])
+                        .to_string();
 
-                matches.push(SearchMatch {
-                    path: file_path.clone(),
-                    line: line_idx + 1,
-                    column: col,
-                    byte_offset: range.start.0,
-                    line_text,
-                });
+                    matches.push(SearchMatch {
+                        path: file_path.clone(),
+                        line: line_idx + 1,
+                        column: col,
+                        byte_offset: range.start.0,
+                        line_text,
+                    });
+                }
             }
+            Err(error) => errors.push(format!("{}: {error}", file_path.display())),
         }
     }
 
@@ -219,7 +227,13 @@ fn run_search(query: &str, paths: &[String], json_mode: bool) -> Result<ExitCode
         );
     }
 
-    if total_matches > 0 {
+    for error in &errors {
+        eprintln!("Error: could not search {error}");
+    }
+
+    if !errors.is_empty() {
+        Ok(ExitCode::from(2))
+    } else if total_matches > 0 {
         Ok(ExitCode::SUCCESS)
     } else {
         Ok(ExitCode::from(1))
@@ -231,11 +245,18 @@ fn run_replace(
     replacement: &str,
     paths: &[String],
     dry_run: bool,
+    write_mode: bool,
     check_mode: bool,
     json_mode: bool,
 ) -> Result<ExitCode, String> {
     if query.is_empty() {
         return Err("Search query cannot be empty".into());
+    }
+    if write_mode && dry_run {
+        return Err("--write and --dry-run cannot be used together".into());
+    }
+    if check_mode && write_mode {
+        return Err("--write and --check cannot be used together".into());
     }
 
     let search_roots: Vec<PathBuf> = if paths.is_empty() {
@@ -244,40 +265,53 @@ fn run_replace(
         paths.iter().map(PathBuf::from).collect()
     };
 
-    let files = discover_files(&search_roots);
+    let discovery = discover_files_with_errors(&search_roots);
+    let files = discovery.files;
     let mut file_summaries = Vec::new();
     let mut total_replacements = 0;
+    let mut errors = discovery.errors;
 
     for file_path in &files {
-        if let Ok((mut doc, _meta)) = load_from_file(file_path) {
-            let matches = find_all(doc.rope(), query);
-            let count = matches.len();
-            if count > 0 {
-                total_replacements += count;
-                let modified = !dry_run && !check_mode;
+        match load_from_file(file_path) {
+            Ok((mut doc, _meta)) => {
+                let matches = find_all(doc.rope(), query);
+                let count = matches.len();
+                if count > 0 {
+                    let modified = write_mode && !check_mode;
 
-                if modified {
-                    replace_all(&mut doc, query, replacement)
-                        .map_err(|e| format!("Failed to apply replacement in {}: {e:?}", file_path.display()))?;
-                    save_to_file(&doc, file_path)
-                        .map_err(|e| format!("Failed to save {}: {e}", file_path.display()))?;
+                    if modified {
+                        if let Err(e) = replace_all(&mut doc, query, replacement) {
+                            errors.push(format!(
+                                "{}: failed to apply replacement: {e:?}",
+                                file_path.display()
+                            ));
+                            continue;
+                        }
+                        if let Err(e) = save_to_file(&doc, file_path) {
+                            errors.push(format!("{}: failed to save: {e}", file_path.display()));
+                            continue;
+                        }
+                    }
+
+                    file_summaries.push(FileReplaceSummary {
+                        path: file_path.clone(),
+                        replacements: count,
+                        modified,
+                    });
+                    total_replacements += count;
                 }
-
-                file_summaries.push(FileReplaceSummary {
-                    path: file_path.clone(),
-                    replacements: count,
-                    modified,
-                });
             }
+            Err(error) => errors.push(format!("{}: {error}", file_path.display())),
         }
     }
 
     let result = ReplaceResult {
         query: query.to_string(),
         replacement: replacement.to_string(),
-        dry_run: dry_run || check_mode,
+        dry_run: !write_mode || check_mode,
         total_replacements,
         files: file_summaries,
+        errors: errors.clone(),
     };
 
     if json_mode {
@@ -289,7 +323,7 @@ fn run_replace(
     } else {
         let prefix = if check_mode {
             "[CHECK]"
-        } else if dry_run {
+        } else if !write_mode || dry_run {
             "[DRY RUN]"
         } else {
             "[MODIFIED]"
@@ -307,7 +341,7 @@ fn run_replace(
 
         let mode_desc = if check_mode {
             "Detected"
-        } else if dry_run {
+        } else if !write_mode || dry_run {
             "Would replace"
         } else {
             "Replaced"
@@ -317,13 +351,23 @@ fn run_replace(
             "\n{} {} occurrence{} across {} file{}.",
             mode_desc,
             result.total_replacements,
-            if result.total_replacements == 1 { "" } else { "s" },
+            if result.total_replacements == 1 {
+                ""
+            } else {
+                "s"
+            },
             result.files.len(),
             if result.files.len() == 1 { "" } else { "s" }
         );
     }
 
-    if check_mode {
+    for error in &errors {
+        eprintln!("Error: {error}");
+    }
+
+    if !errors.is_empty() {
+        Ok(ExitCode::from(2))
+    } else if check_mode {
         // In check mode: exit 0 if no occurrences found, exit 1 if matches exist
         if total_replacements == 0 {
             Ok(ExitCode::SUCCESS)
@@ -363,7 +407,7 @@ fn main() -> ExitCode {
             for arg in &args[2..] {
                 if arg == "--json" {
                     json_mode = true;
-                } else if !arg.starts_with('-') && file_path.is_none() {
+                } else if file_path.is_none() {
                     file_path = Some(arg.as_str());
                 }
             }
@@ -392,9 +436,9 @@ fn main() -> ExitCode {
             for arg in &args[2..] {
                 if arg == "--json" {
                     json_mode = true;
-                } else if !arg.starts_with('-') && query.is_none() {
+                } else if query.is_none() {
                     query = Some(arg.as_str());
-                } else if !arg.starts_with('-') {
+                } else {
                     paths.push(arg.clone());
                 }
             }
@@ -418,6 +462,7 @@ fn main() -> ExitCode {
         "replace" => {
             let mut json_mode = false;
             let mut dry_run = false;
+            let mut write_mode = false;
             let mut check_mode = false;
             let mut query = None;
             let mut replacement = None;
@@ -428,20 +473,22 @@ fn main() -> ExitCode {
                     json_mode = true;
                 } else if arg == "--dry-run" {
                     dry_run = true;
+                } else if arg == "--write" {
+                    write_mode = true;
                 } else if arg == "--check" {
                     check_mode = true;
-                } else if !arg.starts_with('-') && query.is_none() {
+                } else if query.is_none() {
                     query = Some(arg.as_str());
-                } else if !arg.starts_with('-') && replacement.is_none() {
+                } else if replacement.is_none() {
                     replacement = Some(arg.as_str());
-                } else if !arg.starts_with('-') {
+                } else {
                     paths.push(arg.clone());
                 }
             }
 
             match (query, replacement) {
                 (Some(q), Some(r)) => {
-                    match run_replace(q, r, &paths, dry_run, check_mode, json_mode) {
+                    match run_replace(q, r, &paths, dry_run, write_mode, check_mode, json_mode) {
                         Ok(code) => code,
                         Err(e) => {
                             eprintln!("Error: {e}");
@@ -451,7 +498,7 @@ fn main() -> ExitCode {
                 }
                 _ => {
                     eprintln!("Error: 'replace' requires both <QUERY> and <REPLACEMENT>.");
-                    eprintln!("Usage: arcade-headless replace <QUERY> <REPLACEMENT> [PATHS...] [--dry-run] [--check] [--json]");
+                    eprintln!("Usage: arcade-headless replace <QUERY> <REPLACEMENT> [PATHS...] [--write] [--dry-run] [--check] [--json]");
                     ExitCode::from(1)
                 }
             }
@@ -462,5 +509,49 @@ fn main() -> ExitCode {
             eprintln!("Run 'arcade-headless --help' for available subcommands.");
             ExitCode::from(1)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temporary_file(contents: &str) -> PathBuf {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("arcade_headless_{nonce}.txt"));
+        fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn replace_is_preview_only_until_write_is_explicit() {
+        let path = temporary_file("before after\n");
+        let path_arg = path.to_string_lossy().into_owned();
+
+        let _ = run_replace(
+            "before",
+            "changed",
+            std::slice::from_ref(&path_arg),
+            false,
+            false,
+            false,
+            true,
+        )
+        .unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "before after\n");
+
+        let _ = run_replace("before", "changed", &[path_arg], false, true, false, true).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "changed after\n");
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn replace_rejects_conflicting_write_flags() {
+        assert!(run_replace("a", "b", &[], true, true, false, true).is_err());
+        assert!(run_replace("a", "b", &[], false, true, true, true).is_err());
     }
 }

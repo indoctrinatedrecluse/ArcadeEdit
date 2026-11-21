@@ -1,11 +1,11 @@
 # ==============================================================================
-# ArcadeEdit Containerized Runtime & Headless Automation Host (v1.2.1)
+# ArcadeEdit Containerized Runtime & Headless Automation Host (v1.3.0)
 # Multi-stage build providing headless file inspection, search/replace,
 # and integrated companion CLI tooling (ir v3.8) inside Docker / Linux containers.
 # ==============================================================================
 
 # Stage 1: Build arcade-headless binary
-FROM rust:1.80-slim-bookworm AS builder
+FROM rust:1.98.1-slim-bookworm AS builder
 
 WORKDIR /build
 
@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     tar \
     procps \
+    passwd \
     && rm -rf /var/lib/apt/lists/*
 
 # Install bundled `ir` CLI utility companion (v3.8)
@@ -48,6 +49,11 @@ RUN curl -fsSL "https://github.com/indoctrinatedrecluse/ir-cli-utility/releases/
 # Copy compiled arcade-headless from builder
 COPY --from=builder /build/target/release/arcade-headless /usr/local/bin/arcade-headless
 RUN chmod +x /usr/local/bin/arcade-headless
+
+# Run against mounted workspaces without root privileges.
+RUN useradd --system --uid 10001 --create-home --shell /usr/sbin/nologin arcade \
+    && chown arcade:arcade /workspace
+USER arcade
 
 # Set default workspace directory
 VOLUME ["/workspace"]

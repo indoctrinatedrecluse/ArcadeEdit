@@ -8,8 +8,8 @@ pub mod io;
 pub mod search;
 pub mod selection;
 
-use std::cmp::min;
 pub use ropey::Rope;
+use std::cmp::min;
 
 pub use history::{History, Transaction};
 pub use io::{has_external_change, load_from_file, save_to_file, FileMetadata, PersistenceError};
@@ -94,7 +94,11 @@ impl std::fmt::Display for EditError {
                 write!(f, "Inverted range: {} > {}", start.0, end.0)
             }
             Self::InvalidByteOffset(offset) => {
-                write!(f, "Invalid or character-splitting byte offset: {}", offset.0)
+                write!(
+                    f,
+                    "Invalid or character-splitting byte offset: {}",
+                    offset.0
+                )
             }
         }
     }
@@ -139,6 +143,7 @@ impl Document {
     }
 
     /// Materializes the document for small callers such as tests and CLI output.
+    #[allow(clippy::inherent_to_string)] // Keep the explicit snapshot API stable and intentional.
     pub fn to_string(&self) -> String {
         self.text.to_string()
     }
@@ -182,7 +187,8 @@ impl Document {
             let removed_len = range.len_bytes();
             let net_change = text_len_bytes as isize - removed_len as isize;
 
-            let new_cursor_pos = (range.start.0 as isize + cumulative_delta + text_len_bytes as isize) as usize;
+            let new_cursor_pos =
+                (range.start.0 as isize + cumulative_delta + text_len_bytes as isize) as usize;
             resulting_cursors.push(Selection::cursor(ByteOffset(new_cursor_pos)));
             cumulative_delta += net_change;
 
@@ -207,7 +213,8 @@ impl Document {
             self.apply(edit.clone())?;
         }
 
-        let after_selections = SelectionSet::from_selections(resulting_cursors, selections.primary_index());
+        let after_selections =
+            SelectionSet::from_selections(resulting_cursors, selections.primary_index());
         let resulting_rev = self.revision;
 
         let tx = Transaction::new(
@@ -256,7 +263,10 @@ impl Document {
             resulting_cursors.push(Selection::cursor(ByteOffset(new_cursor_pos)));
             cumulative_delta -= removed_len as isize;
 
-            let removed_text = self.text.byte_slice(delete_range.start.0..delete_range.end.0).to_string();
+            let removed_text = self
+                .text
+                .byte_slice(delete_range.start.0..delete_range.end.0)
+                .to_string();
             let edit = TextEdit {
                 range: delete_range,
                 replacement: String::new(),
@@ -275,7 +285,8 @@ impl Document {
             self.apply(edit.clone())?;
         }
 
-        let after_selections = SelectionSet::from_selections(resulting_cursors, selections.primary_index());
+        let after_selections =
+            SelectionSet::from_selections(resulting_cursors, selections.primary_index());
         let resulting_rev = self.revision;
 
         let tx = Transaction::new(
@@ -324,7 +335,10 @@ impl Document {
             resulting_cursors.push(Selection::cursor(ByteOffset(new_cursor_pos)));
             cumulative_delta -= removed_len as isize;
 
-            let removed_text = self.text.byte_slice(delete_range.start.0..delete_range.end.0).to_string();
+            let removed_text = self
+                .text
+                .byte_slice(delete_range.start.0..delete_range.end.0)
+                .to_string();
             let edit = TextEdit {
                 range: delete_range,
                 replacement: String::new(),
@@ -343,7 +357,8 @@ impl Document {
             self.apply(edit.clone())?;
         }
 
-        let after_selections = SelectionSet::from_selections(resulting_cursors, selections.primary_index());
+        let after_selections =
+            SelectionSet::from_selections(resulting_cursors, selections.primary_index());
         let resulting_rev = self.revision;
 
         let tx = Transaction::new(
@@ -451,7 +466,9 @@ mod tests {
         // Non-empty selection forward delete
         let mut doc2 = Document::new("apple, banana, cherry");
         let sel_range = Selection::new(ByteOffset(0), ByteOffset(5)); // "apple"
-        let (_tx, _) = doc2.delete_forward_at_selections(&SelectionSet::single(sel_range)).unwrap();
+        let (_tx, _) = doc2
+            .delete_forward_at_selections(&SelectionSet::single(sel_range))
+            .unwrap();
         assert_eq!(doc2.to_string(), ", banana, cherry");
     }
 }

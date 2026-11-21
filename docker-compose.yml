@@ -24,7 +24,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    entrypoint: ["/bin/bash"]
+    entrypoint: ["/bin/sh"]
     stdin_open: true
     tty: true
     volumes:

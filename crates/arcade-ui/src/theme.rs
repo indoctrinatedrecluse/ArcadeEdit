@@ -156,4 +156,3 @@ impl SolarizedTheme {
         rgba(0x2aa19838)
     }
 }
-

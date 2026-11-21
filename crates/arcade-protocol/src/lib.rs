@@ -1,7 +1,7 @@
 //! Versioned command and result types for ArcadeEdit's non-UI boundary.
 
-use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// The first stable shape of the ArcadeEdit command protocol.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -108,6 +108,9 @@ pub struct ReplaceResult {
     pub total_replacements: usize,
     /// Per-file replacement details.
     pub files: Vec<FileReplaceSummary>,
+    /// Discovery, read, replace, or save failures; successful files remain listed above.
+    #[serde(default)]
+    pub errors: Vec<String>,
 }
 
 /// A serializable response envelope for a command.
@@ -148,7 +151,8 @@ mod tests {
 
         let response = Response::new(inspect);
         let json = serde_json::to_string(&response).expect("serialize");
-        let deserialized: Response<InspectResult> = serde_json::from_str(&json).expect("deserialize");
+        let deserialized: Response<InspectResult> =
+            serde_json::from_str(&json).expect("deserialize");
 
         assert_eq!(deserialized.protocol_version, PROTOCOL_VERSION);
         assert_eq!(deserialized.result.language, "Rust");
@@ -183,6 +187,7 @@ mod tests {
                 replacements: 2,
                 modified: false,
             }],
+            errors: Vec::new(),
         };
         let res = Response::new(replace);
         let json = serde_json::to_string(&res).expect("serialize");

@@ -225,7 +225,8 @@ impl TerminalScreenGrid {
                 let mut segments: Vec<(String, Rgba, Option<Rgba>, bool, bool)> = Vec::new();
 
                 for (c_idx, cell) in row.cells.iter().enumerate() {
-                    let is_cursor = self.cursor_visible && r_idx == self.cursor_row && c_idx == self.cursor_col;
+                    let is_cursor =
+                        self.cursor_visible && r_idx == self.cursor_row && c_idx == self.cursor_col;
 
                     let mut fg = if cell.dim {
                         theme.text_muted
@@ -251,8 +252,15 @@ impl TerminalScreenGrid {
                         bg = Some(theme.syntax_cyan);
                     }
 
-                    if let Some((last_text, last_fg, last_bg, last_bold, last_ul)) = segments.last_mut() {
-                        if !is_cursor && *last_fg == fg && *last_bg == bg && *last_bold == bold && *last_ul == underline {
+                    if let Some((last_text, last_fg, last_bg, last_bold, last_ul)) =
+                        segments.last_mut()
+                    {
+                        if !is_cursor
+                            && *last_fg == fg
+                            && *last_bg == bg
+                            && *last_bold == bold
+                            && *last_ul == underline
+                        {
                             last_text.push(cell.c);
                             continue;
                         }
@@ -378,65 +386,117 @@ impl Perform for TerminalScreenGrid {
             // Cursor Position: CSI [row] ; [col] H (or f)
             'H' | 'f' => {
                 let mut iter = params.iter();
-                let r = iter.next().and_then(|p| p.first().copied()).unwrap_or(1).max(1);
-                let c = iter.next().and_then(|p| p.first().copied()).unwrap_or(1).max(1);
+                let r = iter
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(1)
+                    .max(1);
+                let c = iter
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(1)
+                    .max(1);
                 self.cursor_row = (r as usize - 1).min(self.rows.saturating_sub(1));
                 self.cursor_col = (c as usize - 1).min(self.cols.saturating_sub(1));
             }
 
             // Cursor Up: CSI [n] A
             'A' => {
-                let n = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(1).max(1) as usize;
+                let n = params
+                    .iter()
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(1)
+                    .max(1) as usize;
                 self.cursor_row = self.cursor_row.saturating_sub(n);
             }
 
             // Cursor Down: CSI [n] B
             'B' => {
-                let n = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(1).max(1) as usize;
+                let n = params
+                    .iter()
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(1)
+                    .max(1) as usize;
                 self.cursor_row = (self.cursor_row + n).min(self.rows.saturating_sub(1));
             }
 
             // Cursor Forward: CSI [n] C
             'C' => {
-                let n = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(1).max(1) as usize;
+                let n = params
+                    .iter()
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(1)
+                    .max(1) as usize;
                 self.cursor_col = (self.cursor_col + n).min(self.cols.saturating_sub(1));
             }
 
             // Cursor Back: CSI [n] D
             'D' => {
-                let n = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(1).max(1) as usize;
+                let n = params
+                    .iter()
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(1)
+                    .max(1) as usize;
                 self.cursor_col = self.cursor_col.saturating_sub(n);
             }
 
             // Cursor Horizontal Absolute: CSI [n] G or `
             'G' | '`' => {
-                let c = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(1).max(1) as usize;
+                let c = params
+                    .iter()
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(1)
+                    .max(1) as usize;
                 self.cursor_col = (c.saturating_sub(1)).min(self.cols.saturating_sub(1));
             }
 
             // Cursor Vertical Absolute: CSI [n] d
             'd' => {
-                let r = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(1).max(1) as usize;
+                let r = params
+                    .iter()
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(1)
+                    .max(1) as usize;
                 self.cursor_row = (r.saturating_sub(1)).min(self.rows.saturating_sub(1));
             }
 
             // Cursor Next Line: CSI [n] E
             'E' => {
-                let n = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(1).max(1) as usize;
+                let n = params
+                    .iter()
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(1)
+                    .max(1) as usize;
                 self.cursor_col = 0;
                 self.cursor_row = (self.cursor_row + n).min(self.rows.saturating_sub(1));
             }
 
             // Cursor Previous Line: CSI [n] F
             'F' => {
-                let n = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(1).max(1) as usize;
+                let n = params
+                    .iter()
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(1)
+                    .max(1) as usize;
                 self.cursor_col = 0;
                 self.cursor_row = self.cursor_row.saturating_sub(n);
             }
 
             // Erase in Display: CSI [n] J
             'J' => {
-                let n = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(0);
+                let n = params
+                    .iter()
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(0);
                 match n {
                     // 0: clear from cursor to end of screen
                     0 => {
@@ -488,7 +548,11 @@ impl Perform for TerminalScreenGrid {
 
             // Erase in Line: CSI [n] K
             'K' => {
-                let n = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(0);
+                let n = params
+                    .iter()
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(0);
                 if let Some(r) = self.rows_data.get_mut(self.cursor_row) {
                     match n {
                         // 0: clear from cursor to end of line
@@ -524,7 +588,12 @@ impl Perform for TerminalScreenGrid {
 
             // Erase Characters: CSI [n] X
             'X' => {
-                let n = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(1).max(1) as usize;
+                let n = params
+                    .iter()
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(1)
+                    .max(1) as usize;
                 if let Some(r) = self.rows_data.get_mut(self.cursor_row) {
                     for col in self.cursor_col..(self.cursor_col + n).min(self.cols) {
                         if let Some(cell) = r.cells.get_mut(col) {
@@ -539,7 +608,12 @@ impl Perform for TerminalScreenGrid {
 
             // Delete Characters: CSI [n] P
             'P' => {
-                let n = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(1).max(1) as usize;
+                let n = params
+                    .iter()
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(1)
+                    .max(1) as usize;
                 if let Some(r) = self.rows_data.get_mut(self.cursor_row) {
                     for _ in 0..n {
                         if self.cursor_col < r.cells.len() {
@@ -552,7 +626,12 @@ impl Perform for TerminalScreenGrid {
 
             // Insert Blank Characters: CSI [n] @
             '@' => {
-                let n = params.iter().next().and_then(|p| p.first().copied()).unwrap_or(1).max(1) as usize;
+                let n = params
+                    .iter()
+                    .next()
+                    .and_then(|p| p.first().copied())
+                    .unwrap_or(1)
+                    .max(1) as usize;
                 if let Some(r) = self.rows_data.get_mut(self.cursor_row) {
                     for _ in 0..n {
                         if self.cursor_col <= r.cells.len() {
@@ -651,14 +730,14 @@ impl Perform for TerminalScreenGrid {
                         49 => self.current_bg = None, // Default bg
 
                         // Bright foreground colors
-                        90 => self.current_fg = Some(rgb(0x586e75)),  // Bright Black (base01)
-                        91 => self.current_fg = Some(rgb(0xcb4b16)),  // Bright Red (orange)
-                        92 => self.current_fg = Some(rgb(0x859900)),  // Bright Green
-                        93 => self.current_fg = Some(rgb(0xb58900)),  // Bright Yellow
-                        94 => self.current_fg = Some(rgb(0x268bd2)),  // Bright Blue
-                        95 => self.current_fg = Some(rgb(0x6c71c4)),  // Bright Magenta (violet)
-                        96 => self.current_fg = Some(rgb(0x2aa198)),  // Bright Cyan
-                        97 => self.current_fg = Some(rgb(0xfdf6e3)),  // Bright White (base3)
+                        90 => self.current_fg = Some(rgb(0x586e75)), // Bright Black (base01)
+                        91 => self.current_fg = Some(rgb(0xcb4b16)), // Bright Red (orange)
+                        92 => self.current_fg = Some(rgb(0x859900)), // Bright Green
+                        93 => self.current_fg = Some(rgb(0xb58900)), // Bright Yellow
+                        94 => self.current_fg = Some(rgb(0x268bd2)), // Bright Blue
+                        95 => self.current_fg = Some(rgb(0x6c71c4)), // Bright Magenta (violet)
+                        96 => self.current_fg = Some(rgb(0x2aa198)), // Bright Cyan
+                        97 => self.current_fg = Some(rgb(0xfdf6e3)), // Bright White (base3)
 
                         // Bright background colors
                         100 => self.current_bg = Some(rgba(0x586e7540)),

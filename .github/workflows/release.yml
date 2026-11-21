@@ -32,6 +32,7 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.98.1
           targets: ${{ matrix.target }}
 
       - name: Build Windows binaries (Desktop + Headless)
@@ -40,6 +41,7 @@ jobs:
         run: |
           cargo build --release --target ${{ matrix.target }} -p arcade-desktop -p arcade-headless
           Copy-Item target/${{ matrix.target }}/release/arcade-desktop.exe .
+          Copy-Item arcade-desktop.exe arcade-desktop-windows-x86_64.exe
           Copy-Item target/${{ matrix.target }}/release/arcade-headless.exe .
           Invoke-WebRequest -Uri "https://github.com/indoctrinatedrecluse/ir-cli-utility/releases/download/v3.8/ir-windows.zip" -OutFile "ir-windows.zip"
           Expand-Archive -Path "ir-windows.zip" -DestinationPath "ir_dist" -Force
@@ -61,7 +63,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.target }}-package
-          path: ${{ matrix.artifact_name }}
+          path: |
+            ${{ matrix.artifact_name }}
+            arcade-desktop-windows-x86_64.exe
           if-no-files-found: error
 
   publish:

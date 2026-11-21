@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  headless:
+    name: Headless checks (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+          components: clippy, rustfmt
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Test display-independent crates
+        run: cargo test -p arcade-core -p arcade-protocol -p arcade-language -p arcade-workspace -p arcade-headless
+      - name: Lint display-independent crates
+        run: cargo clippy -p arcade-core -p arcade-protocol -p arcade-language -p arcade-workspace -p arcade-headless --all-targets
+      - name: Ensure headless dependency graph excludes GPUI
+        shell: bash
+        run: |
+          if cargo tree -p arcade-headless --edges normal | grep -qi gpui; then
+            echo "arcade-headless must not depend on GPUI" >&2
+            exit 1
+          fi
+      - name: Build headless release binary
+        run: cargo build --release -p arcade-headless
+
+  container:
+    name: Container smoke checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build container image
+        run: docker build -t arcade-edit-ci .
+      - name: Check container CLI and safe replacement workflow
+        shell: bash
+        run: |
+          docker run --rm arcade-edit-ci --version
+          smoke_dir="$(mktemp -d)"
+          trap 'rm -rf "$smoke_dir"' EXIT
+          printf 'before after' > "$smoke_dir/sample.txt"
+          docker run --rm -v "$smoke_dir:/workspace/smoke" arcade-edit-ci replace before changed /workspace/smoke/sample.txt
+          test "$(cat "$smoke_dir/sample.txt")" = 'before after'
+          docker run --rm --user "$(id -u):$(id -g)" -v "$smoke_dir:/workspace/smoke" arcade-edit-ci replace before changed /workspace/smoke/sample.txt --write
+          test "$(cat "$smoke_dir/sample.txt")" = 'changed after'
+          docker run --rm -v "$smoke_dir:/workspace/smoke" arcade-edit-ci inspect /workspace/smoke/sample.txt --json
+
+  windows:
+    name: Workspace checks (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust 1.98.1
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.1
+      - name: Test full workspace including ConPTY checks
+        run: cargo test --workspace
+      - name: Build desktop and headless release binaries
+        run: cargo build --release -p arcade-desktop -p arcade-headless

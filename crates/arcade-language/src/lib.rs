@@ -13,7 +13,9 @@ pub use highlight::{
 };
 pub use markdown::highlight_markdown;
 pub use scanners::{highlight_json, highlight_toml, highlight_yaml};
-pub use service::{HighlightRequest, HighlightResponse, HighlightWorker, LanguageId, LanguageService};
+pub use service::{
+    HighlightRequest, HighlightResponse, HighlightWorker, LanguageId, LanguageService,
+};
 
 /// Reports whether syntax services should be requested for a document.
 pub fn syntax_is_enabled_for(byte_length: usize, threshold: usize) -> bool {
